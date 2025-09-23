@@ -3,14 +3,14 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>YHM2 Daily Attendance</title>
+  <title>Daily Attendance – Replica</title>
   <link rel="stylesheet" href="style.css"/>
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.3.0/papaparse.min.js"></script>
-  <script src="app.js" defer></script>
+  <script defer src="app.js"></script>
 </head>
 <body>
   <header>
-    <div class="logo">Daily Attendance Dashboard</div>
+    <div class="logo">Daily Attendance – Replica</div>
     <div class="file-status-container">
       <span id="fileStatus">Ready</span>
       <button id="processBtn">Process Files</button>
@@ -18,73 +18,40 @@
   </header>
 
   <main>
-    <section class="card" id="step1">
-      <h2 class="card-header">Step 1: Select Date and Shift</h2>
+    <section class="card">
       <div class="row">
-        <label for="dateInput">Date:</label>
-        <input type="date" id="dateInput"/>
-      </div>
-      <div class="row">
-        <label for="shiftInput">Shift:</label>
+        <label for="dateInput">Date</label>
+        <input type="date" id="dateInput">
+        <label for="shiftInput">Shift</label>
         <select id="shiftInput">
           <option value="Day">Day</option>
           <option value="Night">Night</option>
         </select>
+        <div class="codes">Corners: <span id="codesEl"></span></div>
       </div>
       <div class="row">
-        <input type="checkbox" id="excludeNewHires" checked/>
-        <label for="excludeNewHires">Exclude New Hires (&lt; 3 Days)</label>
+        <label><input type="checkbox" id="excludeNewHires" checked> Exclude new hires (&lt; 3 days)</label>
       </div>
     </section>
 
-    <section class="card" id="step2">
-      <h2 class="card-header">Step 2: Upload Files</h2>
+    <section class="card">
+      <h2 class="card-header">Upload files</h2>
       <div class="file-upload-grid">
-        <label class="file">Roster <input type="file" id="rosterFile" accept=".csv"/></label>
-        <label class="file">MyTime <input type="file" id="mytimeFile" accept=".csv"/></label>
-        <label class="file">Vacation (Optional) <input type="file" id="vacFile" accept=".csv"/></label>
+        <label class="file">Roster <input type="file" id="rosterFile" accept=".csv" /></label>
+        <label class="file">MyTime (CAN Daily Attendance) <input type="file" id="mytimeFile" accept=".csv" /></label>
+        <label class="file">CAN Daily Hours Summary (Vacation) <input type="file" id="vacFile" accept=".csv" /></label>
 
-        <!-- NEW: Separate Swap-Out and Swap-In files -->
-        <label class="file">Shift Swap — Out (Approved) <input type="file" id="swapOutFile" accept=".csv"/></label>
-        <label class="file">Shift Swap — In (Approved) <input type="file" id="swapInFile" accept=".csv"/></label>
+        <!-- Two placeholders: Swap-Out & Swap-In (either can be the combined export; parser reads both) -->
+        <label class="file">Shift Swap — Out <input type="file" id="swapOutFile" accept=".csv" /></label>
+        <label class="file">Shift Swap — In <input type="file" id="swapInFile" accept=".csv" /></label>
 
-        <label class="file">VET / VTO <input type="file" id="vetFile" accept=".csv"/></label>
+        <label class="file">VET / VTO (PostingAcceptance) <input type="file" id="vetFile" accept=".csv" /></label>
       </div>
     </section>
 
-    <section class="card" id="dashboard">
-      <h2 class="card-header">Dashboard</h2>
-      <div class="row details">
-        <p>Date: <span id="dashboardDate"></span></p>
-        <p>Shift: <span id="dashboardShift"></span></p>
-        <p>Corner Codes: <span id="codesEl"></span></p>
-      </div>
-
-      <div class="metric-chips" id="summaryChips">
-        <div class="chip">
-          <span class="chip-label">Expected Total</span>
-          <span class="chip-value" id="totalExpectedChip">0</span>
-        </div>
-        <div class="chip">
-          <span class="chip-label">Present Total</span>
-          <span class="chip-value" id="totalPresentChip">0</span>
-        </div>
-        <div class="chip">
-          <span class="chip-label">Vacation / Swap-Out / VTO Excluded</span>
-          <span class="chip-value" id="vacExcludedChip">0</span>
-        </div>
-      </div>
-
-      <div class="dashboard-tables">
-        <div>
-          <h3>Expected Headcount</h3>
-          <table id="expectedTable" class="table"></table>
-        </div>
-        <div>
-          <h3>Present Headcount</h3>
-          <table id="presentTable" class="table"></table>
-        </div>
-      </div>
+    <section class="card">
+      <h2 class="card-header">Attendance Table (replica)</h2>
+      <table id="replicaTable" class="table"></table>
     </section>
   </main>
 </body>
