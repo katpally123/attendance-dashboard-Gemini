@@ -1,122 +1,117 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>YHM2 Daily Attendance</title>
-    <link rel="stylesheet" href="style.css" />
-    <script src="https://cdn.jsdelivr.net/npm/papaparse@5.3.0/papaparse.min.js"></script>
-    <script src="app.js" defer></script>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>YHM2 Daily Attendance</title>
+    <link rel="stylesheet" href="style.css" />
+    <script src="https://cdn.jsdelivr.net/npm/papaparse@5.3.0/papaparse.min.js"></script>
+    <script src="app.js" defer></script>
 </head>
 <body>
-    <header>
-        <div class="logo">Daily Attendance Dashboard</div>
-        <div class="file-status-container">
-            <span id="file-status">Ready</span>
-            <button id="processBtn">Process Files</button>
-        </div>
-    </header>
+    <header>
+        <div class="logo">Daily Attendance Dashboard</div>
+        <div class="file-status-container">
+            <span id="fileStatus">Ready</span>
+            <button id="processBtn">Process Files</button>
+        </div>
+    </header>
 
-    <main>
-        <section class="card" id="step1">
-            <h2 class="card-header">Step 1: Select Date and Shift</h2>
-            <div class="row">
-                <label for="date-input">Date:</label>
-                <input type="date" id="date-input" />
-            </div>
-            <div class="row">
-                <label for="shift-select">Shift:</label>
-                <select id="shift-select">
-                    <option value="DAY">DAY</option>
-                    <option value="NIGHT">NIGHT</option>
-                </select>
-            </div>
-        </section>
+    <main>
+        <section class="card" id="step1">
+            <h2 class="card-header">Step 1: Select Date and Shift</h2>
+            <div class="row">
+                <label for="dateInput">Date:</label>
+                <input type="date" id="dateInput" />
+            </div>
+            <div class="row">
+                <label for="shiftInput">Shift:</label>
+                <select id="shiftInput">
+                    <option value="Day">Day</option>
+                    <option value="Night">Night</option>
+                </select>
+            </div>
+        </section>
 
-        <section class="card" id="step2">
-            <h2 class="card-header">Step 2: Upload Files</h2>
-            <div class="file-upload-grid">
-                <label class="file">Roster <input type="file" id="rosterFile" accept=".csv" /></label>
-                <label class="file">MyTime <input type="file" id="mytimeFile" accept=".csv" /></label>
-                <label class="file">Vacation (Optional) <input type="file" id="vacFile" accept=".csv" /></label>
-                <label class="file">Shift Swap <input type="file" id="swapFile" accept=".csv" /></label>
-                <label class="file">VET/VTO <input type="file" id="vetVtoFile" accept=".csv" /></label>
-            </div>
-        </section>
+        <section class="card" id="step2">
+            <h2 class="card-header">Step 2: Upload Files</h2>
+            <div class="file-upload-grid">
+                <label class="file">Roster <input type="file" id="rosterFile" accept=".csv" /></label>
+                <label class="file">MyTime <input type="file" id="mytimeFile" accept=".csv" /></label>
+                <label class="file">Vacation (Optional) <input type="file" id="vacFile" accept=".csv" /></label>
+                <label class="file">Shift Swap <input type="file" id="swapFile" accept=".csv" /></label>
+                <label class="file">VET/VTO <input type="file" id="vetFile" accept=".csv" /></label>
+            </div>
+        </section>
 
-        <section class="card" id="dashboard">
-            <h2 class="card-header">Dashboard</h2>
-            <div class="row details">
-                <p>Date: <span id="dashboardDate"></span></p>
-                <p>Shift: <span id="dashboardShift"></span></p>
-                <p>Corner Codes: <span id="dashboardCodes"></span></p>
-            </div>
-            <div class="dashboard-tables">
-                <div>
-                    <h3>Expected Headcount</h3>
-                    <table id="expectedTable" class="table">
-                        <thead>
-                            <tr>
-                                <th>Department</th>
-                                <th class="right">AMZN</th>
-                                <th class="right">TEMP</th>
-                                <th class="right">TOTAL</th>
-                            </tr>
-                        </thead>
-                        <tbody></tbody>
-                        <tfoot>
-                            <tr>
-                                <td>Total</td>
-                                <td class="right total-amzn"></td>
-                                <td class="right total-temp"></td>
-                                <td class="right total-total"></td>
-                            </tr>
-                        </tfoot>
-                    </table>
-                </div>
-                <div>
-                    <h3>Present Headcount</h3>
-                    <table id="presentTable" class="table">
-                        <thead>
-                            <tr>
-                                <th>Department</th>
-                                <th class="right">AMZN</th>
-                                <th class="right">TEMP</th>
-                                <th class="right">TOTAL</th>
-                            </tr>
-                        </thead>
-                        <tbody></tbody>
-                        <tfoot>
-                            <tr>
-                                <td>Total</td>
-                                <td class="right total-amzn"></td>
-                                <td class="right total-temp"></td>
-                                <td class="right total-total"></td>
-                            </tr>
-                        </tfoot>
-                    </table>
-                </div>
-            </div>
-            <div class="metric-chips">
-                <div class="chip">
-                    <span class="chip-label">Total Expected</span>
-                    <span class="chip-value" id="totalExpectedChip">0</span>
-                </div>
-                <div class="chip">
-                    <span class="chip-label">Total Present</span>
-                    <span class="chip-value" id="totalPresentChip">0</span>
-                </div>
-                <div class="chip">
-                    <span class="chip-label">Vacation Excluded</span>
-                    <span class="chip-value" id="vacExcludedChip">0</span>
-                </div>
-            </div>
-        </section>
+        <section class="card" id="dashboard">
+            <h2 class="card-header">Dashboard</h2>
+            <div class="row details">
+                <p>Date: <span id="dashboardDate"></span></p>
+                <p>Shift: <span id="dashboardShift"></span></p>
+                <p>Corner Codes: <span id="codesEl"></span></p>
+            </div>
+            <div class="dashboard-tables">
+                <div>
+                    <h3>Expected Headcount</h3>
+                    <p id="expectedNote"></p>
+                    <table id="expectedTable" class="table">
+                        <thead>
+                            <tr>
+                                <th>Department</th>
+                                <th class="right">AMZN</th>
+                                <th class="right">TEMP</th>
+                                <th class="right">TOTAL</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                        <tfoot>
+                            <tr>
+                                <td>Total</td>
+                                <td class="right total-amzn"></td>
+                                <td class="right total-temp"></td>
+                                <td class="right total-total"></td>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>
+                <div>
+                    <h3>Present Headcount</h3>
+                    <table id="presentTable" class="table">
+                        <thead>
+                            <tr>
+                                <th>Department</th>
+                                <th class="right">AMZN</th>
+                                <th class="right">TEMP</th>
+                                <th class="right">TOTAL</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                        <tfoot>
+                            <tr>
+                                <td>Total</td>
+                                <td class="right total-amzn"></td>
+                                <td class="right total-temp"></td>
+                                <td class="right total-total"></td>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>
+            </div>
+            <div class="metric-chips" id="summaryChips">
+            </div>
+        </section>
 
-        <section class="card" id="audit-log">
-            <h2 class="card-header">Audit Log</h2>
-            <div id="auditLogContainer"></div>
-        </section>
-    </main>
+        <section class="card" id="audit-log">
+            <h2 class="card-header">Audit Log</h2>
+            <div id="auditLogContainer"></div>
+        </section>
+        <section class="card" id="verify">
+            <h2 class="card-header">Verification & Audit</h2>
+                    </section>
+        <section class="card mt">
+            <button id="downloadAudit">Download Audit CSV</button>
+        </section>
+    </main>
 </body>
 </html>
