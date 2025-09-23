@@ -17,10 +17,8 @@ header {
 }
 
 header .logo { font-size: 1.5rem; font-weight: bold; }
-
 .file-status-container { display: flex; align-items: center; }
 
-/* FIXED: match the actual ID in HTML */
 #fileStatus {
   background-color: #fff;
   color: #007bff;
@@ -63,7 +61,7 @@ main { padding: 2rem; max-width: 1200px; margin: auto; }
 
 .file-upload-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px,1fr));
+  grid-template-columns: repeat(auto-fit, minmax(220px,1fr));
   gap: 1rem;
 }
 .file { display: flex; flex-direction: column; font-weight: bold; }
@@ -82,7 +80,6 @@ input[type="file"] { margin-top: 0.5rem; }
 .table .right { text-align: right; }
 
 .metric-chips { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 1.5rem; }
-
 .chip {
   background-color: #007bff;
   color: white;
@@ -91,13 +88,11 @@ input[type="file"] { margin-top: 0.5rem; }
   display: flex;
   flex-direction: column;
   align-items: center;
-  min-width: 150px;
+  min-width: 180px;
 }
-.chip-label { font-size: 0.8rem; text-transform: uppercase; opacity: 0.8; }
+.chip-label { font-size: 0.8rem; text-transform: uppercase; opacity: 0.85; }
 .chip-value { font-size: 1.5rem; font-weight: bold; }
 
-/* NEW: visual feedback for Present vs Expected */
+/* Present chip turns green/red vs expected */
 .chip.ok { background-color: #28a745; }
 .chip.warn { background-color: #dc3545; }
-
-.mt { margin-top: 1rem; }
