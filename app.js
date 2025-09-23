@@ -103,7 +103,8 @@ document.addEventListener("DOMContentLoaded", () => {
             });
         });
     };
-
+    
+    // Updated renderTables function to fix the issue
     const renderTables = (expected, present, swapInExp, swapInPres, vetExp, vetPres) => {
         const departments = Object.keys(expected);
         const header = expectedTable.querySelector("thead").innerHTML;
@@ -153,18 +154,25 @@ document.addEventListener("DOMContentLoaded", () => {
                 <td class="right">${vetPres.TEMP}</td>
                 <td class="right">${vetPres.TOTAL}</td>
             </tr>`;
+            
+        // Corrected calculation of totals to fix the rendering issue
+        const totalExpectedAMZN = departments.reduce((sum, d) => sum + expected[d].AMZN, 0) + swapInExp.AMZN + vetExp.AMZN;
+        const totalExpectedTEMP = departments.reduce((sum, d) => sum + expected[d].TEMP, 0) + swapInExp.TEMP + vetExp.TEMP;
+        const totalExpected = totalExpectedAMZN + totalExpectedTEMP;
 
-        const totalExpected = Object.values(expected).reduce((sum, d) => sum + d.TOTAL, 0) + swapInExp.TOTAL + vetExp.TOTAL;
-        const totalPresent = Object.values(present).reduce((sum, d) => sum + d.TOTAL, 0) + swapInPres.TOTAL + vetPres.TOTAL;
-
+        const totalPresentAMZN = departments.reduce((sum, d) => sum + present[d].AMZN, 0) + swapInPres.AMZN + vetPres.AMZN;
+        const totalPresentTEMP = departments.reduce((sum, d) => sum + present[d].TEMP, 0) + swapInPres.TEMP + vetPres.TEMP;
+        const totalPresent = totalPresentAMZN + totalPresentTEMP;
+        
         expectedTable.innerHTML = `<thead>${header}</thead><tbody>${rowsExp}${swapExpRow}${vetExpRow}</tbody>
-            <tfoot><tr><td>Total</td><td class="right">${expected.total.AMZN + swapInExp.AMZN + vetExp.AMZN}</td><td class="right">${expected.total.TEMP + swapInExp.TEMP + vetExp.TEMP}</td><td class="right">${totalExpected}</td></tr></tfoot>`;
+            <tfoot><tr><td>Total</td><td class="right">${totalExpectedAMZN}</td><td class="right">${totalExpectedTEMP}</td><td class="right">${totalExpected}</td></tr></tfoot>`;
 
         presentTable.innerHTML = `<thead>${header}</thead><tbody>${rowsPre}${swapPresRow}${vetPresRow}</tbody>
-            <tfoot><tr><td>Total</td><td class="right">${present.total.AMZN + swapInPres.AMZN + vetPres.AMZN}</td><td class="right">${present.total.TEMP + swapInPres.TEMP + vetPres.TEMP}</td><td class="right">${totalPresent}</td></tr></tfoot>`;
+            <tfoot><tr><td>Total</td><td class="right">${totalPresentAMZN}</td><td class="right">${totalPresentTEMP}</td><td class="right">${totalPresent}</td></tr></tfoot>`;
     };
 
     const renderChips = (expected, present, day, shift, codes, vacExcludedCount) => {
+        // Corrected calculation of totals to fix the rendering issue
         const totalExpected = Object.values(expected).reduce((sum, d) => sum + d.TOTAL, 0);
         const totalPresent = Object.values(present).reduce((sum, d) => sum + d.TOTAL, 0);
 
