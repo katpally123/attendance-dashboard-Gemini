@@ -1,24 +1,29 @@
 // ====== CONFIG ======
-const SETTINGS_URL = "https://raw.githubusercontent.com/katpally123/attendance-dashboard/main/config/settings.json";
+const SETTINGS_URL = "./settings.json";
 
 // ====== State ======
 let SETTINGS = null;
-// Force DA to appear in tables, always in this order:
 const ORDER = ["Inbound","DA","ICQA","CRETs"];
 
 // ====== Boot ======
 fetch(SETTINGS_URL)
-  .then(r => { if(!r.ok) throw new Error("settings.json fetch failed"); return r.json(); })
-  .then(cfg => { SETTINGS = cfg; ensureDABucket(); initUI(); })
-  .catch(e => { console.error(e); alert("Couldn't load settings.json"); });
-
-// Ensure DA exists even if settings.json doesn't list it yet
-function ensureDABucket(){
-  SETTINGS.departments = SETTINGS.departments || {};
-  if (!SETTINGS.departments.DA) {
-    SETTINGS.departments.DA = { "dept_ids": ["1211030","1211040","1299030","1299040"] };
-  }
-}
+  .then(r => {
+    if (!r.ok) {
+      if (r.status === 404) {
+        throw new Error("settings.json not found. Make sure the file is in the same folder as index.html.");
+      }
+      throw new Error("settings.json fetch failed with status: " + r.status);
+    }
+    return r.json();
+  })
+  .then(cfg => {
+    SETTINGS = cfg;
+    initUI();
+  })
+  .catch(e => {
+    console.error(e);
+    alert(e.message || "Couldn't load settings.json");
+  });
 
 // ====== Elements ======
 const dateEl   = document.getElementById("dateInput");
@@ -29,7 +34,7 @@ const mytimeEl = document.getElementById("mytimeFile");
 const vacEl    = document.getElementById("vacFile");
 const swapEl   = document.getElementById("swapFile");
 const vetEl    = document.getElementById("vetFile");
-const codesEl  = document.getElementById("shiftCodes");
+const codesEl  = document.getElementById("codesEl");
 const processBtn = document.getElementById("processBtn");
 const fileStatus = document.getElementById("fileStatus");
 
@@ -37,6 +42,11 @@ const summaryChips  = document.getElementById("summaryChips");
 const expectedNote  = document.getElementById("expectedNote");
 const expectedTable = document.getElementById("expectedTable");
 const presentTable  = document.getElementById("presentTable");
+const dashboardDateEl = document.getElementById("dashboardDate");
+const dashboardShiftEl = document.getElementById("dashboardShift");
+const totalExpectedChip = document.getElementById("totalExpectedChip");
+const totalPresentChip = document.getElementById("totalPresentChip");
+const vacExcludedChip = document.getElementById("vacExcludedChip");
 
 // Tabs
 document.querySelectorAll(".tab").forEach(b=>{
@@ -91,7 +101,7 @@ function renderShiftCodes(){
   const dayName = toDayName(dateEl.value);
   const shift = shiftEl.value;
   const codes = (SETTINGS.shift_schedule?.[shift]?.[dayName]) || [];
-  codesEl.innerHTML = `Shifts for <b>${dayName}</b> — <b>${shift}</b>: ${codes.map(c=>`<code>${c}</code>`).join(" ")}`;
+  codesEl.innerHTML = codes.map(c=>`<code>${c}</code>`).join(" ");
 }
 function sumBlock(block){
   const acc = {AMZN:0, TEMP:0, TOTAL:0};
@@ -121,17 +131,23 @@ function renderChips(expected, present, dayName, shift, codes, vacExcluded){
   const exp = sumBlock(expected).TOTAL;
   const pre = sumBlock(present).TOTAL;
   const pct = exp ? ((pre/exp)*100).toFixed(1) : "0.0";
-  summaryChips.innerHTML = `
-    <span class="chip">Day: <b>${dayName}</b></span>
-    <span class="chip">Shift: <b>${shift}</b></span>
-    <span class="chip">Corners: ${codes.map(c=>`<code>${c}</code>`).join(" ")}</span>
-    <span class="chip">Expected Total: <b>${exp}</b></span>
-    <span class="chip ${pre>=exp?'ok':'warn'}">Present Total: <b>${pre}</b> (${pct}%)</span>
-    ${vacExcluded!=null ? `<span class="chip">Vacation excluded: <b>${vacExcluded}</b></span>` : ""}
-  `;
+  
+  dashboardDateEl.textContent = dayName;
+  dashboardShiftEl.textContent = shift;
+  codesEl.innerHTML = codes.map(c=>`<code>${c}</code>`).join(" ");
+  totalExpectedChip.textContent = exp;
+  totalPresentChip.textContent = pre;
+  vacExcludedChip.textContent = vacExcluded;
+  
+  if (pre >= exp) {
+    totalPresentChip.closest('.chip').classList.remove('warn');
+    totalPresentChip.closest('.chip').classList.add('ok');
+  } else {
+    totalPresentChip.closest('.chip').classList.remove('ok');
+    totalPresentChip.closest('.chip').classList.add('warn');
+  }
 }
 
-// CSV parsing
 function parseCSVFile(file, opts={header:true, skipFirstLine:false}){
   return new Promise((resolve,reject)=>{
     const reader = new FileReader();
@@ -153,7 +169,6 @@ function parseCSVFile(file, opts={header:true, skipFirstLine:false}){
   });
 }
 
-// HH:MM → decimal hours
 function toHours(val) {
   const t = String(val ?? "").trim();
   if (!t) return 0;
@@ -295,7 +310,7 @@ processBtn.addEventListener("click", async ()=>{
     let filtered = rosterEnriched.filter(x => codes.includes(x.corner));
 
     // New hires exclusion
-    if (newHireEl.checked){
+    if (newHireEl && newHireEl.checked){
       const dayStart = new Date(dateEl.value+"T00:00:00");
       filtered = filtered.filter(x => {
         if (!x.start) return true;
@@ -531,7 +546,6 @@ function renderVerify(stats) {
     });
   });
 
-  // Download CSV
   const dl = document.getElementById("downloadAudit");
   if (dl) dl.onclick = ()=>{
     const rows = stats.auditRows;
