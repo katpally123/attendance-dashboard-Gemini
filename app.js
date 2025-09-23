@@ -1,5 +1,5 @@
 // ====== CONFIG ======
-const SETTINGS_URL = "./config.json";
+const SETTINGS_URL = "./settings.json";
 
 // ====== State ======
 let SETTINGS = null;
@@ -9,21 +9,13 @@ const ORDER = ["Inbound","DA","ICQA","CRETs"];
 fetch(SETTINGS_URL)
   .then(r => {
     if (!r.ok) {
-      if (r.status === 404) {
-        throw new Error("settings.json not found. Make sure the file is in the same folder as index.html.");
-      }
+      if (r.status === 404) throw new Error("settings.json not found. Put it beside index.html.");
       throw new Error("settings.json fetch failed with status: " + r.status);
     }
     return r.json();
   })
-  .then(cfg => {
-    SETTINGS = cfg;
-    initUI();
-  })
-  .catch(e => {
-    console.error(e);
-    alert(e.message || "Couldn't load settings.json");
-  });
+  .then(cfg => { SETTINGS = cfg; initUI(); })
+  .catch(e => { console.error(e); alert(e.message || "Couldn't load settings.json"); });
 
 // ====== Elements ======
 const dateEl   = document.getElementById("dateInput");
@@ -38,8 +30,6 @@ const codesEl  = document.getElementById("codesEl");
 const processBtn = document.getElementById("processBtn");
 const fileStatus = document.getElementById("fileStatus");
 
-const summaryChips  = document.getElementById("summaryChips");
-const expectedNote  = document.getElementById("expectedNote");
 const expectedTable = document.getElementById("expectedTable");
 const presentTable  = document.getElementById("presentTable");
 const dashboardDateEl = document.getElementById("dashboardDate");
@@ -47,16 +37,6 @@ const dashboardShiftEl = document.getElementById("dashboardShift");
 const totalExpectedChip = document.getElementById("totalExpectedChip");
 const totalPresentChip = document.getElementById("totalPresentChip");
 const vacExcludedChip = document.getElementById("vacExcludedChip");
-
-// Tabs
-document.querySelectorAll(".tab").forEach(b=>{
-  b.addEventListener("click", ()=>{
-    document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));
-    document.querySelectorAll(".tabpane").forEach(x=>x.classList.remove("active"));
-    b.classList.add("active");
-    document.getElementById(b.dataset.tab).classList.add("active");
-  });
-});
 
 // ====== UI init ======
 function initUI(){
@@ -68,7 +48,6 @@ function initUI(){
   shiftEl.addEventListener("change", renderShiftCodes);
 }
 
-// ====== Helpers ======
 function toDayName(iso){ if(!iso) return "Monday"; return new Date(iso+"T00:00:00").toLocaleDateString("en-US",{weekday:"long"}); }
 function first2(s){ return (s||"").slice(0,2); }
 function firstAndThird(s){ return (s?.length>=3) ? s[0]+s[2] : ""; }
@@ -130,22 +109,17 @@ function renderTables(expected, present){
 function renderChips(expected, present, dayName, shift, codes, vacExcluded){
   const exp = sumBlock(expected).TOTAL;
   const pre = sumBlock(present).TOTAL;
-  const pct = exp ? ((pre/exp)*100).toFixed(1) : "0.0";
-  
+
   dashboardDateEl.textContent = dayName;
   dashboardShiftEl.textContent = shift;
   codesEl.innerHTML = codes.map(c=>`<code>${c}</code>`).join(" ");
   totalExpectedChip.textContent = exp;
   totalPresentChip.textContent = pre;
   vacExcludedChip.textContent = vacExcluded;
-  
-  if (pre >= exp) {
-    totalPresentChip.closest('.chip').classList.remove('warn');
-    totalPresentChip.closest('.chip').classList.add('ok');
-  } else {
-    totalPresentChip.closest('.chip').classList.remove('ok');
-    totalPresentChip.closest('.chip').classList.add('warn');
-  }
+
+  const chip = totalPresentChip.closest('.chip');
+  chip.classList.remove('ok','warn');
+  chip.classList.add(pre >= exp ? 'ok' : 'warn');
 }
 
 function parseCSVFile(file, opts={header:true, skipFirstLine:false}){
@@ -169,23 +143,13 @@ function parseCSVFile(file, opts={header:true, skipFirstLine:false}){
   });
 }
 
-function toHours(val) {
-  const t = String(val ?? "").trim();
-  if (!t) return 0;
-  const m = t.match(/^(\d{1,2}):(\d{2})$/);
-  if (m) return parseInt(m[1],10) + parseInt(m[2],10)/60;
-  const cleaned = t.replace(/,/g, ".").replace(/[^\d.]/g, "");
-  const n = parseFloat(cleaned);
-  return isNaN(n) ? 0 : n;
-}
-
 // ====== PROCESS ======
 processBtn.addEventListener("click", async ()=>{
   if (!SETTINGS){ alert("Settings not loaded yet. Try again."); return; }
-  const dayName = toDayName(dateEl.value);
   if (!dateEl.value){ alert("Pick a date."); return; }
   if (!rosterEl.files[0] || !mytimeEl.files[0]){ alert("Upload both Roster CSV and MyTime CSV."); return; }
 
+  const dayName = toDayName(dateEl.value);
   const shift = shiftEl.value;
   const codes = SETTINGS.shift_schedule?.[shift]?.[dayName] || [];
   if (!codes.length){ alert("No shift codes configured for that selection."); return; }
@@ -201,9 +165,9 @@ processBtn.addEventListener("click", async ()=>{
       vetEl.files[0] ? parseCSVFile(vetEl.files[0], {header:true}) : Promise.resolve([]),
     ]);
 
-    // Vacation
-    let vacIds = new Set();
-    let vacRowsCount = vacRaw.length;
+    // Vacation IDs (same-day)
+    const vacIds = new Set();
+    const vacRowsCount = vacRaw.length;
     if (vacRowsCount > 0) {
       const selectedISO = dateEl.value;
       const sampleV = vacRaw[0] || {};
@@ -214,73 +178,63 @@ processBtn.addEventListener("click", async ()=>{
       const V_HOURS = findKey(sampleV, ["Hours"]);
 
       for (const row of vacRaw) {
-        if (V_DATE && new Date(row[V_DATE]).toISOString().slice(0, 10) !== selectedISO) continue;
+        if (V_DATE && new Date(row[V_DATE]).toISOString().slice(0,10) !== selectedISO) continue;
         const id = normalizeId(row[V_ID]);
         const code = String(row[V_VAC_CODE] || row[V_VAC_ABSENCE] || "").toLowerCase();
         const hours = parseFloat(row[V_HOURS]) || 0;
-        if ((code.includes("vac") || code.includes("pto")) && hours > 0) {
-          vacIds.add(id);
-        }
+        if ((code.includes("vac") || code.includes("pto")) && hours > 0) vacIds.add(id);
       }
     }
 
-    // Swap and VET/VTO
-    const swapOutIds = new Set();
-    const swapInIds = new Set();
-    const vetIds = new Set();
-    const vtoIds = new Set();
+    // Swaps / VET / VTO
+    const swapOutIds = new Set(), swapInIds = new Set();
+    const vetIds = new Set(), vtoIds = new Set();
     const targetDate = dateEl.value.replace(/-/g, "/");
 
     if (swapRaw.length > 0) {
-      const SWAP_EMP_ID = findKey(swapRaw[0], ["Employee 1 ID", "Person ID"]);
+      const SWAP_EMP_ID = findKey(swapRaw[0], ["Employee 1 ID", "Person ID", "Employee ID"]);
       const SWAP_STATUS = findKey(swapRaw[0], ["Status"]);
       const SWAP_DATE_SKIP = findKey(swapRaw[0], ["Date to Skip"]);
       const SWAP_DATE_WORK = findKey(swapRaw[0], ["Date to Work"]);
       for (const row of swapRaw) {
         if (row[SWAP_STATUS] === "Approved") {
           const empId = normalizeId(row[SWAP_EMP_ID]);
-          if (row[SWAP_DATE_SKIP] === targetDate) {
-            swapOutIds.add(empId);
-          }
-          if (row[SWAP_DATE_WORK] === targetDate) {
-            swapInIds.add(empId);
-          }
+          if (row[SWAP_DATE_SKIP] === targetDate) swapOutIds.add(empId);
+          if (row[SWAP_DATE_WORK] === targetDate) swapInIds.add(empId);
         }
       }
     }
 
     if (vetRaw.length > 0) {
-      const VET_VTO_EMP_ID = findKey(vetRaw[0], ["Employee ID"]);
-      const VET_VTO_TYPE = findKey(vetRaw[0], ["Opportunity Type"]);
-      const VET_VTO_DATE = findKey(vetRaw[0], ["Shift Date"]);
+      const VET_VTO_EMP_ID = findKey(vetRaw[0], ["Employee ID","Person ID"]);
+      const VET_VTO_TYPE   = findKey(vetRaw[0], ["Opportunity Type"]);
+      const VET_VTO_DATE   = findKey(vetRaw[0], ["Shift Date","Date"]);
       for (const row of vetRaw) {
         if (row[VET_VTO_DATE] === targetDate) {
           const empId = normalizeId(row[VET_VTO_EMP_ID]);
-          if (row[VET_VTO_TYPE] === "VET") {
-            vetIds.add(empId);
-          } else if (row[VET_VTO_TYPE] === "VTO") {
-            vtoIds.add(empId);
-          }
+          if (row[VET_VTO_TYPE] === "VET") vetIds.add(empId);
+          else if (row[VET_VTO_TYPE] === "VTO") vtoIds.add(empId);
         }
       }
     }
 
-    // Build On-Prem map
+    // Build On-Prem map (from MyTime)
     const onPremMap = new Map();
     const m0 = mytimeRaw[0] || {};
     const M_PERSON = findKey(m0, ["Person ID","Employee ID","Person Number","ID"]);
     const M_ONPREM = findKey(m0, ["On Premises","On Premises?","OnPremises"]);
     if (!M_PERSON || !M_ONPREM) throw new Error("Missing MyTime cols (Person ID / On Premises).");
+    const presentMarkers = (SETTINGS.present_markers || ["X"]).map(s=>String(s).toUpperCase());
     for (const row of mytimeRaw){
       const pid = normalizeId(row[M_PERSON]);
       const val = String(row[M_ONPREM] ?? "").trim().toUpperCase();
-      const isOnPrem = (SETTINGS.present_markers || ["X"]).includes(val);
+      const isOnPrem = presentMarkers.includes(val);
       if (pid) onPremMap.set(pid, (onPremMap.get(pid) || false) || isOnPrem);
     }
 
     // Resolve roster headers
     const r0 = rosterRaw[0] || {};
-    const R_EMP   = findKey(r0, ["Employee ID","Person Number","Person ID","Badge ID"]);
+    const R_EMP   = findKey(r0, ["Employee ID","Person Number","Person ID","Badge ID","ID"]);
     const R_DEPT  = findKey(r0, ["Department ID","Home Department ID","Dept ID"]);
     const R_AREA  = findKey(r0, ["Management Area ID","Mgmt Area ID","Area ID","Area"]);
     const R_TYPE  = findKey(r0, ["Employment Type","Associate Type","Worker Type","Badge Type","Company"]);
@@ -306,6 +260,10 @@ processBtn.addEventListener("click", async ()=>{
       return { empId, deptId, areaId, empType, sp, corner, met, start, onPrem, vac, isSwapOut, isVto };
     });
 
+    // Map for quick lookup of emp type by ID (for swaps/VET)
+    const empTypeById = new Map();
+    for (const x of rosterEnriched) if (x.empId) empTypeById.set(x.empId, x.empType);
+
     // Corner filter
     let filtered = rosterEnriched.filter(x => codes.includes(x.corner));
 
@@ -323,7 +281,7 @@ processBtn.addEventListener("click", async ()=>{
     const expectedCohort = filtered.filter(x => !x.vac && !x.isSwapOut && !x.isVto);
     const vacExcludedCount = filtered.length - expectedCohort.length;
 
-    // Buckets (Inbound excludes DA)
+    // Buckets
     const cfg = SETTINGS.departments;
     const DA_IDS = cfg.DA.dept_ids;
     const inboundMinusDA = x => cfg.Inbound.dept_ids.includes(x.deptId) && !DA_IDS.includes(x.deptId);
@@ -367,42 +325,40 @@ processBtn.addEventListener("click", async ()=>{
       CRETs:   countByType(preGroups.CRETs),
     };
 
-    // Add Swap-in and VET to the counts
-    const swapInCounts = { AMZN: 0, TEMP: 0, TOTAL: 0 };
-    for (const empId of swapInIds) {
-      const empType = classifyEmpType(empId);
-      swapInCounts[empType]++;
-      swapInCounts.TOTAL++;
-    }
-    expected["Swap In"] = swapInCounts;
-    present["Swap In"] = { AMZN: 0, TEMP: 0, TOTAL: 0 };
-    for (const empId of swapInIds) {
-      if (onPremMap.has(empId)) {
-        const empType = classifyEmpType(empId);
-        present["Swap In"][empType]++;
-        present["Swap In"].TOTAL++;
-      }
-    }
+    // === FIXED: Properly count Swap-In and VET using roster-derived emp types ===
+    const incType = (bucket, t) => {
+      if (t === "AMZN") bucket.AMZN++, bucket.TOTAL++;
+      else if (t === "TEMP") bucket.TEMP++, bucket.TOTAL++;
+    };
 
-    const vetCounts = { AMZN: 0, TEMP: 0, TOTAL: 0 };
-    for (const empId of vetIds) {
-      const empType = classifyEmpType(empId);
-      vetCounts[empType]++;
-      vetCounts.TOTAL++;
+    // Swap-In counts
+    const swapInExpected = { AMZN: 0, TEMP: 0, TOTAL: 0 };
+    const swapInPresent  = { AMZN: 0, TEMP: 0, TOTAL: 0 };
+    for (const empId of swapInIds) {
+      const t = empTypeById.get(empId) || "UNKNOWN";
+      incType(swapInExpected, t);
+      if (onPremMap.get(empId) === true) incType(swapInPresent, t);
     }
-    expected["VET"] = vetCounts;
-    present["VET"] = { AMZN: 0, TEMP: 0, TOTAL: 0 };
-    for (const empId of vetIds) {
-      if (onPremMap.has(empId)) {
-        const empType = classifyEmpType(empId);
-        present["VET"][empType]++;
-        present["VET"].TOTAL++;
-      }
-    }
+    expected["Swap In"] = swapInExpected;
+    present["Swap In"]  = swapInPresent;
 
+    // VET counts
+    const vetExpected = { AMZN: 0, TEMP: 0, TOTAL: 0 };
+    const vetPresent  = { AMZN: 0, TEMP: 0, TOTAL: 0 };
+    for (const empId of vetIds) {
+      const t = empTypeById.get(empId) || "UNKNOWN";
+      incType(vetExpected, t);
+      if (onPremMap.get(empId) === true) incType(vetPresent, t);
+    }
+    expected["VET"] = vetExpected;
+    present["VET"]  = vetPresent;
 
     // Render
-    const ordered = obj => Object.fromEntries([...ORDER.map(k=>[k, obj[k]]), ["Swap In", obj["Swap In"]], ["VET", obj["VET"]]]);
+    const ordered = obj => Object.fromEntries([
+      ...ORDER.map(k=>[k, obj[k]]),
+      ["Swap In", obj["Swap In"]],
+      ["VET",     obj["VET"]]
+    ]);
     renderTables(ordered(expected), ordered(present));
     renderChips(expected, present, dayName, shift, codes, vacExcludedCount);
     fileStatus.textContent = "Done.";
@@ -419,6 +375,7 @@ processBtn.addEventListener("click", async ()=>{
     const auditRows = filtered.map(x=>({
       empId: x.empId, empType: x.empType, deptId: x.deptId, areaId: x.areaId,
       corner: x.corner, onPrem: x.onPrem ? "YES" : "NO", vac: x.vac ? "YES" : "NO",
+      swapOut: x.isSwapOut ? "YES" : "NO", vto: x.isVto ? "YES" : "NO",
       bucket: tagDept(x),
     }));
 
@@ -461,7 +418,7 @@ processBtn.addEventListener("click", async ()=>{
     renderVerify({
       day: dayName,
       shift,
-      presentMarkers: SETTINGS.present_markers || ["X"],
+      presentMarkers,
       rosterRows: rosterRaw.length,
       mytimeRows: mytimeRaw.length,
       vacRows: vacRowsCount,
@@ -481,8 +438,8 @@ processBtn.addEventListener("click", async ()=>{
 
   } catch (err){
     console.error(err);
-    fileStatus.textContent = "Error processing files. Check CSV headers and try again.";
-    alert(err.message || "Error processing files.");
+    fileStatus.textContent = "Error processing files.";
+    alert(err.message || "Error processing files. Check CSV headers and try again.");
   }
 });
 
@@ -508,7 +465,7 @@ function renderVerify(stats) {
       ${pill("Roster rows", stats.rosterRows)}
       ${pill("MyTime rows", stats.mytimeRows)}
       ${pill("Vacation rows", stats.vacRows)}
-      ${pill("Vacation excluded", stats.vacExcluded)}
+      ${pill("Vacation/Swap/VTO excluded", stats.vacExcluded)}
       ${pill("ID matches", `${stats.idMatches} / ${stats.rosterEnriched}`)}
       ${pill("Corner filter", `${stats.afterCorner} rows`)}
       ${pill("Present markers", stats.presentMarkers.join(" / "))}
