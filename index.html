@@ -43,8 +43,12 @@
         <label class="file">Roster <input type="file" id="rosterFile" accept=".csv"/></label>
         <label class="file">MyTime <input type="file" id="mytimeFile" accept=".csv"/></label>
         <label class="file">Vacation (Optional) <input type="file" id="vacFile" accept=".csv"/></label>
-        <label class="file">Shift Swap <input type="file" id="swapFile" accept=".csv"/></label>
-        <label class="file">VET/VTO <input type="file" id="vetFile" accept=".csv"/></label>
+
+        <!-- NEW: Separate Swap-Out and Swap-In files -->
+        <label class="file">Shift Swap — Out (Approved) <input type="file" id="swapOutFile" accept=".csv"/></label>
+        <label class="file">Shift Swap — In (Approved) <input type="file" id="swapInFile" accept=".csv"/></label>
+
+        <label class="file">VET / VTO <input type="file" id="vetFile" accept=".csv"/></label>
       </div>
     </section>
 
@@ -66,7 +70,7 @@
           <span class="chip-value" id="totalPresentChip">0</span>
         </div>
         <div class="chip">
-          <span class="chip-label">Vacation/Swaps/VTO Excluded</span>
+          <span class="chip-label">Vacation / Swap-Out / VTO Excluded</span>
           <span class="chip-value" id="vacExcludedChip">0</span>
         </div>
       </div>
@@ -81,14 +85,6 @@
           <table id="presentTable" class="table"></table>
         </div>
       </div>
-    </section>
-
-    <section class="card" id="verify">
-      <h2 class="card-header">Verification & Audit</h2>
-    </section>
-
-    <section class="card mt">
-      <button id="downloadAudit">Download Audit CSV</button>
     </section>
   </main>
 </body>
