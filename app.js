@@ -10,7 +10,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const fileStatus = document.getElementById("file-status");
     const dashboardDateEl = document.getElementById("dashboardDate");
     const dashboardShiftEl = document.getElementById("dashboardShift");
-    const dashboardCodesEl = document.getElementById("dashboardCodes");
+    const dashboardCodesEl = document = document.getElementById("dashboardCodes");
     const expectedTable = document.getElementById("expectedTable");
     const presentTable = document.getElementById("presentTable");
     const totalExpectedChip = document.getElementById("totalExpectedChip");
@@ -84,7 +84,7 @@ document.addEventListener("DOMContentLoaded", () => {
         return days <= 3;
     };
 
-    const parseCSVFile = (file, options) => {
+    const safeParseCSVFile = (file, options) => {
         if (!file) return Promise.resolve([]);
         return new Promise((resolve, reject) => {
             Papa.parse(file, {
@@ -205,11 +205,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
         try {
             const [rosterRaw, mytimeRaw, vacRaw, swapRaw, vetVtoRaw] = await Promise.all([
-                parseCSVFile(rosterEl.files[0], { header: true }),
-                parseCSVFile(mytimeEl.files[0], { header: true, skipFirstLine: true }),
-                parseCSVFile(vacFileEl.files[0], { header: true }),
-                parseCSVFile(swapFileEl.files[0], { header: true }),
-                parseCSVFile(vetVtoFileEl.files[0], { header: true }),
+                safeParseCSVFile(rosterEl.files[0], { header: true }),
+                safeParseCSVFile(mytimeEl.files[0], { header: true, skipFirstLine: true }),
+                safeParseCSVFile(vacFileEl.files[0], { header: true }),
+                safeParseCSVFile(swapFileEl.files[0], { header: true }),
+                safeParseCSVFile(vetVtoFileEl.files[0], { header: true }),
             ]);
 
             logAudit("All files parsed successfully.");
