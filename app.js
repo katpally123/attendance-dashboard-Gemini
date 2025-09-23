@@ -1,5 +1,5 @@
 // ====== CONFIG ======
-const SETTINGS_URL = "./settings.json";
+const SETTINGS_URL = "./config.json";
 
 // ====== State ======
 let SETTINGS = null;
