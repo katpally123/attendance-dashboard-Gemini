@@ -25,5 +25,14 @@
       "Saturday":  ["NB","NN","NL","NH"]
     }
   },
-  "present_markers": ["X","Y","YES","TRUE","1"]
+  "present_markers": ["X","Y","YES","TRUE","1"],
+
+  /* NEW: swap column mapping + accepted statuses */
+  "swap_mapping": {
+    "id": ["Employee 1 ID","Employee ID","Person ID","Person Number","Badge ID","ID","Associate ID"],
+    "status": ["Status","Swap Status"],
+    "skip_date": ["Date to Skip","Skip Date","Skip"],
+    "work_date": ["Date to Work","Work Date","Work"],
+    "approved_statuses": ["Approved","Completed","Accepted"]
+  }
 }
