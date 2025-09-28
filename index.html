@@ -41,7 +41,6 @@
         <label class="file">MyTime (CAN Daily Attendance) <input type="file" id="mytimeFile" accept=".csv" /></label>
         <label class="file">CAN Daily Hours Summary (Vacation) <input type="file" id="vacFile" accept=".csv" /></label>
 
-        <!-- Either swap slot can hold a combined export; we read both and merge -->
         <label class="file">Shift Swap — Out <input type="file" id="swapOutFile" accept=".csv" /></label>
         <label class="file">Shift Swap — In <input type="file" id="swapInFile" accept=".csv" /></label>
 
@@ -50,8 +49,17 @@
     </section>
 
     <section class="card">
-      <h2 class="card-header">Attendance Table (replica)</h2>
+      <div class="row" style="justify-content:space-between;align-items:center;">
+        <h2 class="card-header" style="margin:0">Attendance Table (replica)</h2>
+        <div id="vacNote" class="dim" style="font-size:13px;display:none;">
+          Vacation excluded: <a id="vacCSV" href="#" download="vacation_excluded.csv">download CSV</a>
+        </div>
+      </div>
       <table id="replicaTable" class="table"></table>
+      <div class="row" style="margin-top:10px;gap:10px;">
+        <button id="dlNoShow" class="badge-ok" style="border:0;cursor:pointer;">Download No-Show CSV</button>
+        <span class="dim" style="font-size:12px;">(No-Show = scheduled after exclusions but not present)</span>
+      </div>
     </section>
   </main>
 </body>
