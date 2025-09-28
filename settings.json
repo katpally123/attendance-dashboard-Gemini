@@ -26,8 +26,6 @@
     }
   },
   "present_markers": ["X","Y","YES","TRUE","1"],
-
-  /* NEW: swap column mapping + accepted statuses */
   "swap_mapping": {
     "id": ["Employee 1 ID","Employee ID","Person ID","Person Number","Badge ID","ID","Associate ID"],
     "status": ["Status","Swap Status"],
