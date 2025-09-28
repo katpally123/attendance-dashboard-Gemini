@@ -1,5 +1,4 @@
 // ====== CONFIG ======
-// Cache-bust settings to prevent stale loads
 const SETTINGS_URL = new URL("settings.json", document.baseURI).href + "?v=" + Date.now();
 
 const DEFAULT_SETTINGS = {
@@ -37,6 +36,10 @@ const vetEl    = document.getElementById("vetFile");
 const codesEl  = document.getElementById("codesEl");
 const processBtn = document.getElementById("processBtn");
 const fileStatus = document.getElementById("fileStatus");
+const noShowBtn  = document.getElementById("dlNoShow");
+
+const vacNote = document.getElementById("vacNote");
+const vacCSV  = document.getElementById("vacCSV");
 
 const replicaTable = document.getElementById("replicaTable");
 
@@ -147,6 +150,17 @@ function parseCSVFile(file, opts={header:true, skipFirstLine:false}){
   });
 }
 
+function downloadCSV(filename, rows){
+  const csv = [Object.keys(rows[0]||{id:"EmployeeID"}).join(",")]
+    .concat(rows.map(r => Object.values(r).map(v => `"${String(v??"").replace(/"/g,'""')}"`).join(",")))
+    .join("\n");
+  const blob = new Blob([csv], {type: "text/csv"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; document.body.appendChild(a); a.click();
+  setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 0);
+}
+
 // ====== PROCESS ======
 processBtn.addEventListener("click", async ()=>{
   fileStatus.textContent = "Parsing…";
@@ -180,7 +194,7 @@ processBtn.addEventListener("click", async ()=>{
       if (id) onPrem.set(id, (onPrem.get(id)||false) || val);
     }
 
-    // Vacation (CAN Daily Hours Summary) – PTO/VAC > 0, date = selected
+    // Vacation (CAN Daily Hours Summary)
     const vacIds = new Set();
     if (vacRaw.length){
       const v0 = vacRaw[0];
@@ -198,7 +212,7 @@ processBtn.addEventListener("click", async ()=>{
       }
     }
 
-    // VET/VTO (PostingAcceptance) – robust date + type match
+    // VET/VTO (PostingAcceptance)
     const vetIds = new Set(), vtoIds = new Set();
     if (vetRaw.length){
       const a0 = vetRaw[0];
@@ -217,29 +231,24 @@ processBtn.addEventListener("click", async ()=>{
       }
     }
 
-    // Swap files (both slots may be combined exports; read both)
+    // Swaps
     const collectSwaps = (rows, mapping)=>{
       const out = [], inn = [];
       if (!rows.length) return { out, inn };
       const s0 = rows[0];
-
       const S_ID   = findKey(s0, mapping.id || DEFAULT_SETTINGS.swap_mapping.id);
       const S_ST   = findKey(s0, mapping.status || DEFAULT_SETTINGS.swap_mapping.status);
       const S_SKIP = findKey(s0, mapping.skip_date || DEFAULT_SETTINGS.swap_mapping.skip_date);
       const S_WORK = findKey(s0, mapping.work_date || DEFAULT_SETTINGS.swap_mapping.work_date);
       const APPROVED = (mapping.approved_statuses || DEFAULT_SETTINGS.swap_mapping.approved_statuses)
         .map(s => String(s).toUpperCase());
-
       for (const r of rows){
         const id = normalizeId(r[S_ID]);
         if (!id) continue;
-
         const status = String(r[S_ST] ?? "Approved").trim().toUpperCase();
         const approved = !S_ST || APPROVED.includes(status) || /APPROVED|COMPLETED|ACCEPTED/.test(status);
-
         const skipISO = toISODate(r[S_SKIP]);
         const workISO = toISODate(r[S_WORK]);
-
         if (!approved) continue;
         if (skipISO && skipISO === isoDate) out.push(id);
         if (workISO && workISO === isoDate) inn.push(id);
@@ -280,7 +289,6 @@ processBtn.addEventListener("click", async ()=>{
       return { id, deptId, area, typ, corner, met, start, onp };
     });
 
-    // Full lookup BEFORE corner filter (needed for Swap-In/VET/VTO if coming from other corners)
     const fullById = new Map(roster.map(x => [x.id, x]));
 
     // Corner filter with fallback
@@ -330,106 +338,100 @@ processBtn.addEventListener("click", async ()=>{
     const cohortExpected = cohort.filter(x => !excluded.has(x.id));
     const cohortPresentExSwaps = cohort.filter(x => x.onp && !excluded.has(x.id));
 
-    // Swap-In expected & present (use FULL roster so people can swap into today's corners)
+    // For displays
+    const swapOutRows        = [...swapOutIds].map(id => byId.get(id)).filter(Boolean);
     const swapInExpectedRows = [...swapInIds].map(id => fullById.get(id)).filter(Boolean);
     const swapInPresentRows  = swapInExpectedRows.filter(x => onPrem.get(x.id)===true);
+    const vetExpectedRows    = [...vetIds].map(id => byId.get(id) || fullById.get(id)).filter(Boolean);
+    const vetPresentRows     = vetExpectedRows.filter(x => onPrem.get(x.id)===true);
 
-    // VET expected & present (full fallback if not in byId)
-    const vetExpectedRows = [...vetIds].map(id => byId.get(id) || fullById.get(id)).filter(Boolean);
-    const vetPresentRows  = vetExpectedRows.filter(x => onPrem.get(x.id)===true);
-
-    // Swap-Out detail rows (for display)
-    const swapOutRows = [...swapOutIds].map(id => byId.get(id)).filter(Boolean);
+    // Vacation excluded rows (for CSV link)
+    const vacationExcludedRows = [...vacIds].map(id => byId.get(id) || fullById.get(id)).filter(Boolean);
 
     // ---------- aggregators ----------
     const depts = ["Inbound","DA","ICQA","CRETs"];
     const mkTable = () => Object.fromEntries(depts.map(d=>[d, {AMZN:0, TEMP:0, TOTAL:0}]));
-
     const countInto = (acc, row) => {
       const b = bucketOf(row);
       if (!depts.includes(b)) return;
       if (row.typ==="AMZN") { acc[b].AMZN++; acc[b].TOTAL++; }
       else if (row.typ==="TEMP") { acc[b].TEMP++; acc[b].TOTAL++; }
     };
-
     const sumTotals = ACC => {
-      let AMZN=0, TEMP=0, TOTAL=0;
-      for (const d of depts){ AMZN+=ACC[d].AMZN; TEMP+=ACC[d].TEMP; TOTAL+=ACC[d].TOTAL; }
-      return { AMZN, TEMP, TOTAL };
+      let t=0; for (const d of depts){ t+=ACC[d].TOTAL; } return t;
     };
 
-    // Build rows
-    const row_RegularExpected   = mkTable(); cohortExpected.forEach(x=>countInto(row_RegularExpected, x));
-    const row_RegularPresentExS = mkTable(); cohortPresentExSwaps.forEach(x=>countInto(row_RegularPresentExS, x));
-    const row_SwapOut           = mkTable(); swapOutRows.forEach(x=>countInto(row_SwapOut, x));
-    const row_SwapInExpected    = mkTable(); swapInExpectedRows.forEach(x=>countInto(row_SwapInExpected, x));
-    const row_SwapInPresent     = mkTable(); swapInPresentRows.forEach(x=>countInto(row_SwapInPresent, x));
-    const row_VTO               = mkTable(); [...vtoIds].map(id=>byId.get(id) || fullById.get(id)).filter(Boolean).forEach(x=>countInto(row_VTO, x));
-    const row_VETAccepted       = mkTable(); vetExpectedRows.forEach(x=>countInto(row_VETAccepted, x));
-    const row_VETPresent        = mkTable(); vetPresentRows.forEach(x=>countInto(row_VETPresent, x));
+    // Build rows that we might show (we'll hide zero-total ones)
+    const rows = [
+      ["Regular HC (Cohort Expected)", (()=>{ const R=mkTable(); cohortExpected.forEach(x=>countInto(R,x)); return R; })()],
+      ["Regular HC Present (Excluding Swaps)", (()=>{ const R=mkTable(); cohortPresentExSwaps.forEach(x=>countInto(R,x)); return R; })()],
+      ["Shift Swap Out", (()=>{ const R=mkTable(); swapOutRows.forEach(x=>countInto(R,x)); return R; })()],
+      ["Shift Swap Expected", (()=>{ const R=mkTable(); swapInExpectedRows.forEach(x=>countInto(R,x)); return R; })()],
+      ["Shift Swap Present", (()=>{ const R=mkTable(); swapInPresentRows.forEach(x=>countInto(R,x)); return R; })()],
+      ["VTO", (()=>{ const R=mkTable(); [...vtoIds].map(id=>byId.get(id) || fullById.get(id)).filter(Boolean).forEach(x=>countInto(R,x)); return R; })()],
+      ["VET Accepted", (()=>{ const R=mkTable(); vetExpectedRows.forEach(x=>countInto(R,x)); return R; })()],
+      ["VET Present", (()=>{ const R=mkTable(); vetPresentRows.forEach(x=>countInto(R,x)); return R; })()]
+    ];
 
-    // Grand totals including VET + Swap (excl VTO)
-    const addRow = (A,B)=> {
-      const R = mkTable();
-      for (const d of depts){
-        R[d].AMZN = A[d].AMZN + B[d].AMZN;
-        R[d].TEMP = A[d].TEMP + B[d].TEMP;
-        R[d].TOTAL= A[d].TOTAL+ B[d].TOTAL;
-      }
-      return R;
-    };
-    const row_TotalExpectedIncl = addRow(addRow(row_RegularExpected, row_SwapInExpected), row_VETAccepted);
-    const row_TotalShowedIncl   = addRow(addRow(row_RegularPresentExS, row_SwapInPresent), row_VETPresent);
-
-    const totalsExp = sumTotals(row_TotalExpectedIncl);
-    const totalsShow= sumTotals(row_TotalShowedIncl);
-    const pctShow   = (totalsExp.TOTAL>0) ? (100*totalsShow.TOTAL/totalsExp.TOTAL) : 0;
-
-    // Regular Attendance % per department
-    const pctDept = {};
-    for (const d of depts){
-      const a = row_RegularExpected[d].TOTAL || 0;
-      const b = row_RegularPresentExS[d].TOTAL || 0;
-      pctDept[d] = a>0 ? (100*b/a) : 0;
-    }
-
-    // ====== Render table ======
+    // ====== Render table (only rows with data) ======
     const header = `
       <thead>
         <tr>
           <th>Attendance Details</th>
           ${depts.map(d=>`<th>${d} AMZN</th><th>${d} TEMP</th>`).join("")}
-          <th>Day 1 HC</th>
+          <th>Total</th>
         </tr>
       </thead>`;
-    function tr(label, ACC, showTotal=true, pctRow=false){
-      const cells = depts.map(d=>`<td>${ACC[d].AMZN}</td><td>${ACC[d].TEMP}</td>`).join("");
-      const total = sumTotals(ACC).TOTAL;
-      const last = pctRow
-        ? `${pctDept[depts[0]].toFixed(2)}% / ${pctDept[depts[1]].toFixed(2)}% / ${pctDept[depts[2]].toFixed(2)}% / ${pctDept[depts[3]].toFixed(2)}%`
-        : total;
-      return `<tr><td>${label}</td>${cells}<td>${showTotal ? last : ""}</td></tr>`;
-    }
-    function trPercent(label, percent){
-      return `<tr><td>${label}</td>${depts.map(_=>`<td class="dim">—</td><td class="dim">—</td>`).join("")}<td>${percent.toFixed(2)}%</td></tr>`;
+
+    const bodyRows = rows
+      .filter(([label, ACC]) => sumTotals(ACC) > 0)
+      .map(([label, ACC]) => {
+        const cells = depts.map(d=>`<td>${ACC[d].AMZN}</td><td>${ACC[d].TEMP}</td>`).join("");
+        const total = sumTotals(ACC);
+        return `<tr><td>${label}</td>${cells}<td>${total}</td></tr>`;
+      })
+      .join("");
+
+    replicaTable.innerHTML = header + "<tbody>" + bodyRows + "</tbody>";
+
+    // Vacation note + CSV
+    if (vacationExcludedRows.length){
+      const vacRows = vacationExcludedRows.map(x => ({
+        id: x.id,
+        dept_bucket: (isInbound(x)?"Inbound":isDA(x)?"DA":isICQA(x)?"ICQA":isCRETs(x)?"CRETs":"Other"),
+        emp_type: x.typ,
+        corner: x.corner
+      }));
+      const csv = ["id,dept_bucket,emp_type,corner"].concat(
+        vacRows.map(r=>[r.id,r.dept_bucket,r.emp_type,r.corner].map(v=>`"${String(v??"").replace(/"/g,'""')}"`).join(","))
+      ).join("\n");
+      const blob = new Blob([csv], {type: "text/csv"});
+      const url = URL.createObjectURL(blob);
+      vacCSV.href = url;
+      vacNote.style.display = "block";
+    } else {
+      vacNote.style.display = "none";
     }
 
-    replicaTable.innerHTML = header + "<tbody>"
-      + tr("Regular HC (Cohort Expected)", row_RegularExpected)
-      + tr("Regular HC Present (Excluding Swaps)", row_RegularPresentExS)
-      + tr("Shift Swap Out", row_SwapOut)
-      + tr("Shift Swap Expected", row_SwapInExpected)
-      + tr("Shift Swap Present", row_SwapInPresent)
-      + tr("Regular Attendance %", row_RegularPresentExS, true, true)
-      + tr("VTO", row_VTO)
-      + tr("VET Accepted", row_VETAccepted)
-      + tr("VET Present", row_VETPresent)
-      + tr("Total HC expected incl VET + Shift Swap (excl VTO)", row_TotalExpectedIncl)
-      + tr("Total Showed incl VET + Shift Swap (excl VTO)", row_TotalShowedIncl)
-      + trPercent("Total Percentage Showed incl VET & Shift Swap (excl VTO)", pctShow)
-      + "</tbody>";
+    // No-Show CSV (scheduled after exclusions, not present)
+    const noShows = cohortExpected.filter(x => !x.onp).map(x => ({
+      id: x.id,
+      dept_bucket: (isInbound(x)?"Inbound":isDA(x)?"DA":isICQA(x)?"ICQA":isCRETs(x)?"CRETs":"Other"),
+      emp_type: x.typ,
+      corner: x.corner,
+      date: isoDate,
+      reason: "No-Show"
+    }));
 
-    fileStatus.textContent = `Done • Expected ${totalsExp.TOTAL}, Showed ${totalsShow.TOTAL} → ${pctShow.toFixed(2)}%`;
+    noShowBtn.onclick = () => {
+      if (!noShows.length) {
+        alert("No no-shows based on current files/date.");
+        return;
+      }
+      downloadCSV(`no_shows_${isoDate}.csv`, noShows);
+    };
+
+    fileStatus.textContent = "Done";
   } catch (e){
     console.error(e);
     fileStatus.textContent = "Error";
