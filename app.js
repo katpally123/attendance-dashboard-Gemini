@@ -8,7 +8,14 @@ const DEFAULT_SETTINGS = {
     CRETs:   { dept_ids: ["1299070","1211070"], management_area_id: "22" }
   },
   shift_schedule: { Day:{}, Night:{} },
-  present_markers: ["X","Y","YES","TRUE","1"]
+  present_markers: ["X","Y","YES","TRUE","1"],
+  swap_mapping: {
+    id: ["Employee 1 ID","Employee ID","Person ID","Person Number","Badge ID","ID","Associate ID"],
+    status: ["Status","Swap Status"],
+    skip_date: ["Date to Skip","Skip Date","Skip"],
+    work_date: ["Date to Work","Work Date","Work"],
+    approved_statuses: ["Approved","Completed","Accepted"]
+  }
 };
 
 // ====== STATE / ELEMS ======
@@ -88,6 +95,26 @@ function classifyEmpType(v){
   if (/(temp|temporary|seasonal|agency|vendor|contract|white badge|wb|csg|adecco|randstad)/.test(x)) return "TEMP";
   return "UNKNOWN";
 }
+// Robust "to ISO date" normalizer
+const toISODate = (d) => {
+  if (!d) return null;
+  const t = String(d).trim();
+  const noTime = t.replace(/[T ]\d.*$/, "");
+  const dt = new Date(noTime);
+  if (!isNaN(dt)) return dt.toISOString().slice(0,10);
+  const mdy = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/;
+  const ymd = /^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$/;
+  let m;
+  if ((m = mdy.exec(noTime))) {
+    const [_, mm, dd, yyyy] = m;
+    return new Date(`${yyyy}-${mm.padStart(2,"0")}-${dd.padStart(2,"0")}`).toISOString().slice(0,10);
+  }
+  if ((m = ymd.exec(noTime))) {
+    const [_, yyyy, mm, dd] = m;
+    return new Date(`${yyyy}-${mm.padStart(2,"0")}-${dd.padStart(2,"0")}`).toISOString().slice(0,10);
+  }
+  return null;
+};
 function parseCSVFile(file, opts={header:true, skipFirstLine:false}){
   return new Promise((resolve,reject)=>{
     const reader = new FileReader();
@@ -119,7 +146,6 @@ processBtn.addEventListener("click", async ()=>{
     ]);
 
     const isoDate = dateEl.value;
-    const targetDateLegacy = isoDate.replace(/-/g,"/"); // many reports use yyyy/mm/dd
     const dayName = toDayName(isoDate);
     const codes = SETTINGS.shift_schedule?.[shiftEl.value]?.[dayName] || [];
     const markers = (SETTINGS.present_markers || ["X"]).map(s=>String(s).toUpperCase());
@@ -136,7 +162,7 @@ processBtn.addEventListener("click", async ()=>{
       if (id) onPrem.set(id, (onPrem.get(id)||false) || val);
     }
 
-    // Vacation (CAN Daily Hours Summary) – filter to selected date and VAC/PTO > 0
+    // Vacation (CAN Daily Hours Summary) – PTO/VAC > 0, date = selected
     const vacIds = new Set();
     if (vacRaw.length){
       const v0 = vacRaw[0];
@@ -145,7 +171,7 @@ processBtn.addEventListener("click", async ()=>{
       const V_CODE = findKey(v0, ["Pay Code","PayCode","Earning Code","Absence Name","Absence Type"]);
       const V_HR   = findKey(v0, ["Hours","Total Hours"]);
       for (const r of vacRaw){
-        const dOk = !V_DATE || (new Date(r[V_DATE]).toISOString().slice(0,10) === isoDate);
+        const dOk = !V_DATE || (toISODate(r[V_DATE]) === isoDate);
         const code = String(r[V_CODE]||"").toLowerCase();
         const hrs = parseFloat(r[V_HR])||0;
         if (dOk && (code.includes("vac") || code.includes("pto")) && hrs>0){
@@ -154,49 +180,61 @@ processBtn.addEventListener("click", async ()=>{
       }
     }
 
-    // VET/VTO (PostingAcceptance)
+    // VET/VTO (PostingAcceptance) – robust date + type match
     const vetIds = new Set(), vtoIds = new Set();
     if (vetRaw.length){
       const a0 = vetRaw[0];
       const A_ID  = findKey(a0, ["Employee ID","Person ID","EID","Person Number"]);
-      const A_TYP = findKey(a0, ["Opportunity Type","opportunity.type"]);
+      const A_TYP = findKey(a0, ["Opportunity Type","opportunity.type","Type"]);
       const A_DT  = findKey(a0, ["Shift Date","Date","opportunity.date"]);
       const A_ACC = findKey(a0, ["opportunity.acceptedCount","Accepted Count","Accepted"]);
       for (const r of vetRaw){
         const accepted = A_ACC ? String(r[A_ACC]).trim() === "1" : true;
-        const dMatch = !A_DT || String(r[A_DT]).trim().replace(/-/g,"/") === targetDateLegacy;
+        const dMatch = !A_DT || (toISODate(r[A_DT]) === isoDate);
         const t = String(r[A_TYP]||"").toUpperCase();
         const id = normalizeId(r[A_ID]);
         if (!id || !accepted || !dMatch) continue;
-        if (t==="VTO") vtoIds.add(id);
-        else if (t==="VET") vetIds.add(id);
+        if (t.includes("VTO")) vtoIds.add(id);
+        else if (t.includes("VET")) vetIds.add(id);
       }
     }
 
-    // Swap files (both slots can contain combined exports; read both)
-    const collectSwaps = (rows)=>{
+    // Swap files (both slots may be combined exports; read both)
+    const collectSwaps = (rows, mapping)=>{
       const out = [], inn = [];
       if (!rows.length) return { out, inn };
       const s0 = rows[0];
-      const S_ID   = findKey(s0, ["Employee 1 ID","Employee ID","Person ID","EID"]);
-      const S_ST   = findKey(s0, ["Status"]);
-      const S_SKIP = findKey(s0, ["Date to Skip","Skip Date"]);
-      const S_WORK = findKey(s0, ["Date to Work","Work Date"]);
+
+      const S_ID   = findKey(s0, mapping.id || DEFAULT_SETTINGS.swap_mapping.id);
+      const S_ST   = findKey(s0, mapping.status || DEFAULT_SETTINGS.swap_mapping.status);
+      const S_SKIP = findKey(s0, mapping.skip_date || DEFAULT_SETTINGS.swap_mapping.skip_date);
+      const S_WORK = findKey(s0, mapping.work_date || DEFAULT_SETTINGS.swap_mapping.work_date);
+      const APPROVED = (mapping.approved_statuses || DEFAULT_SETTINGS.swap_mapping.approved_statuses)
+        .map(s => String(s).toUpperCase());
+
       for (const r of rows){
-        if (String(r[S_ST]).trim()!=="Approved") continue;
         const id = normalizeId(r[S_ID]);
         if (!id) continue;
-        if (r[S_SKIP] && String(r[S_SKIP]).trim()===targetDateLegacy) out.push(id);
-        if (r[S_WORK] && String(r[S_WORK]).trim()===targetDateLegacy) inn.push(id);
+
+        const status = String(r[S_ST] ?? "Approved").trim().toUpperCase();
+        const approved = !S_ST || APPROVED.includes(status) || /APPROVED|COMPLETED|ACCEPTED/.test(status);
+
+        const skipISO = toISODate(r[S_SKIP]);
+        const workISO = toISODate(r[S_WORK]);
+
+        if (!approved) continue;
+        if (skipISO && skipISO === isoDate) out.push(id);
+        if (workISO && workISO === isoDate) inn.push(id);
       }
       return { out, inn };
     };
-    const sA = collectSwaps(swapOutRaw);
-    const sB = collectSwaps(swapInRaw);
+    const mapping = SETTINGS.swap_mapping || DEFAULT_SETTINGS.swap_mapping;
+    const sA = collectSwaps(swapOutRaw, mapping);
+    const sB = collectSwaps(swapInRaw, mapping);
     const swapOutIds = new Set([...sA.out, ...sB.out]);
     const swapInIds  = new Set([...sA.inn, ...sB.inn]);
 
-    // Roster + headers
+    // -------- Roster enrichment --------
     const r0 = rosterRaw[0] || {};
     const R_ID   = findKey(r0, ["Employee ID","Person Number","Person ID","Badge ID","ID"]);
     const R_DEPT = findKey(r0, ["Department ID","Home Department ID","Dept ID"]);
@@ -210,7 +248,7 @@ processBtn.addEventListener("click", async ()=>{
     const first2 = s => (s||"").slice(0,2);
     const firstAndThird = s => (s?.length>=3 ? s[0]+s[2] : "");
 
-    // Enrich roster
+    // Enrich roster (raw)
     let roster = rosterRaw.map(r=>{
       const id = normalizeId(r[R_ID]);
       const deptId = String(r[R_DEPT]??"").trim();
@@ -224,7 +262,10 @@ processBtn.addEventListener("click", async ()=>{
       return { id, deptId, area, typ, corner, met, start, onp };
     });
 
-    // Corner filter
+    // Keep a full lookup BEFORE we filter by today's corners (needed for Swap-In)
+    const fullById = new Map(roster.map(x => [x.id, x]));
+
+    // Corner filter: only today's corners
     roster = roster.filter(x => codes.includes(x.corner));
 
     // Exclude new hires
@@ -248,10 +289,8 @@ processBtn.addEventListener("click", async ()=>{
 
     // Lookup maps
     const byId = new Map(roster.map(x=>[x.id, x]));
-    const empTypeById = new Map(roster.map(x=>[x.id, x.typ]));
-    const bucketById  = new Map(roster.map(x=>[x.id, bucketOf(x)]));
 
-    // Base cohort BEFORE exclusions (for % denominator): the “Regular HC (Cohort Expected)”
+    // Base cohort BEFORE exclusions (for denominator): the “Regular HC (Cohort Expected)”
     const cohort = roster.slice();
 
     // Apply exclusions to cohort: Vacation + Swap-Out + VTO
@@ -263,15 +302,15 @@ processBtn.addEventListener("click", async ()=>{
     const cohortExpected = cohort.filter(x => !excluded.has(x.id));
     const cohortPresentExSwaps = cohort.filter(x => x.onp && !excluded.has(x.id)); // “Regular HC Present (Excluding Swaps)”
 
-    // Swap-In expected & present (from swapInIds; split by dept & AMZN/TEMP)
-    const swapInExpectedRows = [...swapInIds].map(id => byId.get(id)).filter(Boolean);
+    // Swap-In expected & present (use FULL roster so people can swap into today's corners)
+    const swapInExpectedRows = [...swapInIds].map(id => fullById.get(id)).filter(Boolean);
     const swapInPresentRows  = swapInExpectedRows.filter(x => onPrem.get(x.id)===true);
 
     // VET expected & present
-    const vetExpectedRows = [...vetIds].map(id => byId.get(id)).filter(Boolean);
+    const vetExpectedRows = [...vetIds].map(id => byId.get(id) || fullById.get(id)).filter(Boolean);
     const vetPresentRows  = vetExpectedRows.filter(x => onPrem.get(x.id)===true);
 
-    // Swap-Out detail rows (for the row display)
+    // Swap-Out detail rows (for display)
     const swapOutRows = [...swapOutIds].map(id => byId.get(id)).filter(Boolean);
 
     // ---------- aggregators ----------
@@ -300,13 +339,11 @@ processBtn.addEventListener("click", async ()=>{
     const row_SwapOut           = mkTable(); swapOutRows.forEach(x=>countInto(row_SwapOut, x));
     const row_SwapInExpected    = mkTable(); swapInExpectedRows.forEach(x=>countInto(row_SwapInExpected, x));
     const row_SwapInPresent     = mkTable(); swapInPresentRows.forEach(x=>countInto(row_SwapInPresent, x));
-    const row_VTO               = mkTable(); [...vtoIds].map(id=>byId.get(id)).filter(Boolean).forEach(x=>countInto(row_VTO, x));
+    const row_VTO               = mkTable(); [...vtoIds].map(id=>byId.get(id) || fullById.get(id)).filter(Boolean).forEach(x=>countInto(row_VTO, x));
     const row_VETAccepted       = mkTable(); vetExpectedRows.forEach(x=>countInto(row_VETAccepted, x));
     const row_VETPresent        = mkTable(); vetPresentRows.forEach(x=>countInto(row_VETPresent, x));
 
     // Grand totals including VET + Swap (excl VTO)
-    // Expected incl = cohortExpected + SwapInExpected + VETAccepted
-    // Showed incl   = (cohortPresentExSwaps) + SwapInPresent + VETPresent
     const addRow = (A,B)=> {
       const R = mkTable();
       for (const d of depts){
