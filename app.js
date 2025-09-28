@@ -1,5 +1,7 @@
 // ====== CONFIG ======
-const SETTINGS_URL = "./settings.json";
+// Cache-bust settings to prevent stale loads
+const SETTINGS_URL = new URL("settings.json", document.baseURI).href + "?v=" + Date.now();
+
 const DEFAULT_SETTINGS = {
   departments: {
     Inbound: { dept_ids: ["1211010","1211020","1299010","1299020"] },
@@ -115,6 +117,21 @@ const toISODate = (d) => {
   }
   return null;
 };
+// Derive corners from Roster when settings.json doesn’t provide any
+function deriveCornersFromRoster(rows){
+  if (!rows || !rows.length) return [];
+  const r0 = rows[0] || {};
+  const R_COR = findKey(r0, ["Corner","Corner Code"]);
+  const R_SP  = findKey(r0, ["Shift Pattern","Schedule Pattern","Shift"]);
+  const set = new Set();
+  for (const r of rows){
+    const sp = String(r[R_SP] ?? "");
+    const corner = R_COR ? String(r[R_COR] ?? "").trim() : (sp ? sp.slice(0,2) : "");
+    if (corner) set.add(corner);
+  }
+  return Array.from(set);
+}
+
 function parseCSVFile(file, opts={header:true, skipFirstLine:false}){
   return new Promise((resolve,reject)=>{
     const reader = new FileReader();
@@ -147,7 +164,8 @@ processBtn.addEventListener("click", async ()=>{
 
     const isoDate = dateEl.value;
     const dayName = toDayName(isoDate);
-    const codes = SETTINGS.shift_schedule?.[shiftEl.value]?.[dayName] || [];
+    let cornerCodes = SETTINGS.shift_schedule?.[shiftEl.value]?.[dayName] || [];
+    if (!cornerCodes.length) console.warn("No corner codes from settings.json; will fallback to roster-derived.");
     const markers = (SETTINGS.present_markers || ["X"]).map(s=>String(s).toUpperCase());
 
     // MyTime map
@@ -262,11 +280,21 @@ processBtn.addEventListener("click", async ()=>{
       return { id, deptId, area, typ, corner, met, start, onp };
     });
 
-    // Keep a full lookup BEFORE we filter by today's corners (needed for Swap-In)
+    // Full lookup BEFORE corner filter (needed for Swap-In/VET/VTO if coming from other corners)
     const fullById = new Map(roster.map(x => [x.id, x]));
 
-    // Corner filter: only today's corners
-    roster = roster.filter(x => codes.includes(x.corner));
+    // Corner filter with fallback
+    if (!cornerCodes.length) {
+      cornerCodes = deriveCornersFromRoster(rosterRaw);
+      if (cornerCodes.length) {
+        codesEl.innerHTML = cornerCodes.map(c=>`<code>${c}</code>`).join(" ");
+      }
+    }
+    if (cornerCodes.length) {
+      roster = roster.filter(x => cornerCodes.includes(x.corner));
+    } else {
+      console.warn("No corner codes available; skipping corner filter.");
+    }
 
     // Exclude new hires
     if (newHireEl.checked){
@@ -290,7 +318,7 @@ processBtn.addEventListener("click", async ()=>{
     // Lookup maps
     const byId = new Map(roster.map(x=>[x.id, x]));
 
-    // Base cohort BEFORE exclusions (for denominator): the “Regular HC (Cohort Expected)”
+    // Base cohort BEFORE exclusions (for denominator)
     const cohort = roster.slice();
 
     // Apply exclusions to cohort: Vacation + Swap-Out + VTO
@@ -300,13 +328,13 @@ processBtn.addEventListener("click", async ()=>{
     for (const id of vtoIds) if (byId.has(id)) excluded.add(id);
 
     const cohortExpected = cohort.filter(x => !excluded.has(x.id));
-    const cohortPresentExSwaps = cohort.filter(x => x.onp && !excluded.has(x.id)); // “Regular HC Present (Excluding Swaps)”
+    const cohortPresentExSwaps = cohort.filter(x => x.onp && !excluded.has(x.id));
 
     // Swap-In expected & present (use FULL roster so people can swap into today's corners)
     const swapInExpectedRows = [...swapInIds].map(id => fullById.get(id)).filter(Boolean);
     const swapInPresentRows  = swapInExpectedRows.filter(x => onPrem.get(x.id)===true);
 
-    // VET expected & present
+    // VET expected & present (full fallback if not in byId)
     const vetExpectedRows = [...vetIds].map(id => byId.get(id) || fullById.get(id)).filter(Boolean);
     const vetPresentRows  = vetExpectedRows.filter(x => onPrem.get(x.id)===true);
 
@@ -315,7 +343,6 @@ processBtn.addEventListener("click", async ()=>{
 
     // ---------- aggregators ----------
     const depts = ["Inbound","DA","ICQA","CRETs"];
-    const zero = () => ({ AMZN:0, TEMP:0, TOTAL:0 });
     const mkTable = () => Object.fromEntries(depts.map(d=>[d, {AMZN:0, TEMP:0, TOTAL:0}]));
 
     const countInto = (acc, row) => {
@@ -330,8 +357,6 @@ processBtn.addEventListener("click", async ()=>{
       for (const d of depts){ AMZN+=ACC[d].AMZN; TEMP+=ACC[d].TEMP; TOTAL+=ACC[d].TOTAL; }
       return { AMZN, TEMP, TOTAL };
     };
-
-    const asRow = ACC => depts.map(d=>ACC[d]);
 
     // Build rows
     const row_RegularExpected   = mkTable(); cohortExpected.forEach(x=>countInto(row_RegularExpected, x));
@@ -360,7 +385,7 @@ processBtn.addEventListener("click", async ()=>{
     const totalsShow= sumTotals(row_TotalShowedIncl);
     const pctShow   = (totalsExp.TOTAL>0) ? (100*totalsShow.TOTAL/totalsExp.TOTAL) : 0;
 
-    // Regular Attendance % (department-wise) = Regular Present (Ex Swaps) / Regular Expected
+    // Regular Attendance % per department
     const pctDept = {};
     for (const d of depts){
       const a = row_RegularExpected[d].TOTAL || 0;
@@ -368,7 +393,7 @@ processBtn.addEventListener("click", async ()=>{
       pctDept[d] = a>0 ? (100*b/a) : 0;
     }
 
-    // ====== Render table (replica style) ======
+    // ====== Render table ======
     const header = `
       <thead>
         <tr>
@@ -380,8 +405,9 @@ processBtn.addEventListener("click", async ()=>{
     function tr(label, ACC, showTotal=true, pctRow=false){
       const cells = depts.map(d=>`<td>${ACC[d].AMZN}</td><td>${ACC[d].TEMP}</td>`).join("");
       const total = sumTotals(ACC).TOTAL;
-      const last = pctRow ? `${pctDept[depts[0]].toFixed(2)}% / ${pctDept[depts[1]].toFixed(2)}% / ${pctDept[depts[2]].toFixed(2)}% / ${pctDept[depts[3]].toFixed(2)}%`
-                          : total;
+      const last = pctRow
+        ? `${pctDept[depts[0]].toFixed(2)}% / ${pctDept[depts[1]].toFixed(2)}% / ${pctDept[depts[2]].toFixed(2)}% / ${pctDept[depts[3]].toFixed(2)}%`
+        : total;
       return `<tr><td>${label}</td>${cells}<td>${showTotal ? last : ""}</td></tr>`;
     }
     function trPercent(label, percent){
