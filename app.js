@@ -68,16 +68,13 @@ const btnAuditCSV   = document.getElementById("dlAuditCSV");
     SETTINGS = DEFAULT_SETTINGS;
   }
 
-  // tabs
   tabDash.addEventListener("click",()=>setTab("dash"));
   tabAudit.addEventListener("click",()=>setTab("audit"));
 
-  // prefs
   loadUserPrefs();
   if (!dateEl.value) dateEl.value = isoToday();
   updateRibbonStatic();
 
-  // listeners
   dateEl.addEventListener("change",()=>{updateRibbonStatic(); saveUserPrefs();});
   shiftEl.addEventListener("change",()=>{updateRibbonStatic(); saveUserPrefs();});
   newHireEl.addEventListener("change",()=>{updateRibbonStatic(); saveUserPrefs();});
@@ -144,13 +141,10 @@ function toISODate(v){
   if (v == null) return null;
   const t = String(v).trim();
   if (!t) return null;
-  // Try ISO or parseable string
   let d = new Date(t);
   if (!isNaN(d)) return d.toISOString().slice(0,10);
-  // Simple mm/dd/yyyy
   let m = /^(?:(\d{1,2})\/(\d{1,2})\/(\d{4}))$/.exec(t);
   if (m) return `${m[3]}-${m[1].padStart(2,'0')}-${m[2].padStart(2,'0')}`;
-  // yyyy-mm-dd or yyyy/mm/dd
   m = /^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})$/.exec(t);
   if (m) return `${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`;
   return null;
@@ -230,26 +224,43 @@ async function processAll(){
     chipCorners.textContent = cornerCodes.join(", ");
     chipCornerSource.textContent = cornerSource==="settings" ? "(from settings.json)" : "(derived from Roster)";
 
-    /* ---- Roster ---- */
+    /* ---- MyTime ON-PREMISE (authoritative) ---- */
+    const myTimeOnPrem = new Set();
+    if (mytimeRaw.length){
+      const m0 = mytimeRaw[0] || {};
+      const M_ID  = firstKey(m0, ["Employee ID","Person ID","Person Number","Badge ID","ID","EID"]);
+      const M_ONP = firstKey(m0, ["On Premise","On-Premise","OnPremise","On Site","OnSite","On Prem"]);
+      const markers = SETTINGS.present_markers || DEFAULT_SETTINGS.present_markers;
+      if (M_ID && M_ONP){
+        for (const r of mytimeRaw){
+          const id = normalizeId(r[M_ID]); if (!id) continue;
+          if (presentVal(r[M_ONP], markers)) myTimeOnPrem.add(id);
+        }
+      }
+    }
+
+    /* ---- Roster (never used for presence) ---- */
     const r0 = rosterRaw[0] || {};
     const K_ID   = findKey(r0,["Employee ID","Person ID","Person Number","Badge ID","ID"]);
-    const K_ONP  = findKey(r0,["On Premise","On-Premise","OnPremise","On Site","OnSite"]);
     const K_TYP  = findKey(r0,["Employment Type","EmploymentType","Type"]);
     const K_DEPT = findKey(r0,["Department ID","Department","Dept ID","Dept"]);
     const K_AREA = findKey(r0,["Management Area ID","Area ID","Area"]);
     const K_CORNER = findKey(r0,["Corner","Corner Code","CornerName","Corner ID"]);
     const K_START= findKey(r0,["Employment Start Date","Hire Date","Start Date"]);
-    if (!K_ID || !K_ONP || !K_TYP || !K_DEPT) throw new Error("Roster missing required columns (ID, On Premise, Employment Type, Department).");
+    if (!K_ID || !K_TYP || !K_DEPT) throw new Error("Roster missing required columns (ID, Employment Type, Department).");
 
-    let roster = rosterRaw.map(r=>({
-      id: normalizeId(r[K_ID]),
-      onp: presentVal(r[K_ONP], SETTINGS.present_markers || DEFAULT_SETTINGS.present_markers),
-      typ: /TEMP/i.test(String(r[K_TYP]||"")) ? "TEMP" : "AMZN",
-      deptId: String(r[K_DEPT]||"").trim(),
-      area: String(r[K_AREA]||"").trim(),
-      corner: String(r[K_CORNER]||"").trim(),
-      start: r[K_START] ? new Date(r[K_START]) : null
-    })).filter(x=>x.id);
+    let roster = rosterRaw.map(r=>{
+      const id = normalizeId(r[K_ID]);
+      return {
+        id,
+        onp: myTimeOnPrem.has(id),                            // <- ALWAYS from MyTime
+        typ: /TEMP/i.test(String(r[K_TYP]||"")) ? "TEMP" : "AMZN",
+        deptId: String(r[K_DEPT]||"").trim(),
+        area: String(r[K_AREA]||"").trim(),
+        corner: String(r[K_CORNER]||"").trim(),
+        start: r[K_START] ? new Date(r[K_START]) : null
+      };
+    }).filter(x=>x.id);
 
     // Exclude new hires (<3 days) if toggle on
     if (newHireEl.checked){
@@ -262,7 +273,6 @@ async function processAll(){
     }
 
     const byId = new Map(roster.map(x=>[x.id,x]));
-    const fullById = new Map(rosterRaw.map(r=>[ normalizeId(r[K_ID]), r ]));
 
     // Department bucketing
     const cfg = SETTINGS.departments;
@@ -278,16 +288,10 @@ async function processAll(){
       const b = bucketOf(x); if (!b) return;
       ACC[b][x.typ]++; ACC[b].TOTAL++;
     };
-    const fold = rows => {
-      const A = mkRow();
-      rows.forEach(x=>bump(A,x));
-      return A;
-    };
+    const fold = rows => { const A = mkRow(); rows.forEach(x=>bump(A,x)); return A; };
     const sumTotals = A => depts.reduce((s,d)=>s + (A[d]?.TOTAL||0), 0);
 
-    /* ---- Vacation & Banked Holiday (from CAN Daily Hours Summary) ----
-       ≥12h & contains BANKED/HOLIDAY -> BH
-       ≥10h & contains VAC/PTO/VACATION -> Vacation                                    */
+    /* ---- Vacation & Banked Holiday ---- */
     const vacSet = new Set(), bhSet = new Set();
     if (vacRaw.length){
       const v0 = vacRaw[0] || {};
@@ -338,7 +342,7 @@ async function processAll(){
     function collectSwaps(rows, mapping){
       if (!rows.length) return {out:[], inn:[]};
       const S_ID   = findKey(rows[0]||{}, mapping.id) || "";
-      const S_ST   = findKey(rows[0]||{}, mapping.status) || ""; // may be absent; assume approved
+      const S_ST   = findKey(rows[0]||{}, mapping.status) || "";
       const S_SKIP = findKey(rows[0]||{}, mapping.skip_date) || "";
       const S_WORK = findKey(rows[0]||{}, mapping.work_date) || "";
       const APPROVED = (mapping.approved_statuses||[]).map(s=>s.toUpperCase());
@@ -379,6 +383,7 @@ async function processAll(){
     const vetExpectedRows        = [...vetSet].map(id=>byId.get(id)).filter(Boolean);
     const vetPresentRows         = vetExpectedRows.filter(x=>x.onp);
 
+    const depts = ["Inbound","DA","ICQA","CRETs"];
     const row_RegularExpected    = fold(cohortExpected);
     const row_RegularPresentExS  = fold(cohortPresentExSwaps);
     const row_SwapOut            = fold(swapOutRows);
@@ -401,14 +406,13 @@ async function processAll(){
       const total = sumTotals(ACC);
       return `<tr><td>${label}</td>${cells}<td>${total}</td></tr>`;
     };
-    const totalExpected = sumTotals(row_RegularExpected);
-    const totalPresent  = sumTotals(row_RegularPresentExS) + sumTotals(row_SwapInPresent); // showing incl swap-in present
-    const pctShowInclVETSwap = (() => {
-      // include VET present also as showed; expectation already excludes VTO & swap-out
-      const showed = sumTotals(row_RegularPresentExSwaps) + sumTotals(row_SwapInPresent) + sumTotals(row_VETPresent);
-      if (!totalExpected) return "0%";
-      return Math.round((showed/totalExpected)*100) + "%";
-    })();
+
+    const totalExpected = depts.reduce((s,d)=>s + row_RegularExpected[d].TOTAL, 0);
+    const showedIncl = depts.reduce((s,d)=>s
+      + row_RegularPresentExS[d].TOTAL
+      + row_SwapInPresent[d].TOTAL
+      + row_VETPresent[d].TOTAL, 0);
+    const pctShowInclVETSwap = totalExpected ? Math.round((showedIncl/totalExpected)*100) + "%" : "0%";
 
     replicaTable.innerHTML = header + "<tbody>"
       + rowHTML("Regular HC (Cohort Expected)", row_RegularExpected)
@@ -419,13 +423,12 @@ async function processAll(){
       + rowHTML("VTO", row_VTO)
       + rowHTML("VET Expected", row_VETExpected)
       + rowHTML("VET Present", row_VETPresent)
-      + `<tr><td><b>Total % Showed incl VET + Swap (excl VTO)</b></td>` +
-        depts.map(_=>`<td colspan="2"></td>`).join("") +
-        `<td><b>${pctShowInclVETSwap}</b></td></tr>`
+      + `<tr><td><b>Total % Showed incl VET + Swap (excl VTO)</b></td>`
+      + depts.map(_=>`<td colspan="2"></td>`).join("")
+      + `<td><b>${pctShowInclVETSwap}</b></td></tr>`
       + "</tbody>";
 
     /* ---- Audit + Downloads ---- */
-    // Reasons priority: Vacation > BH > VTO > Swap-Out > VET-not-shown > No-Show
     const reasonOf = (id)=>{
       if (vacSet.has(id)) return "Vacation";
       if (bhSet.has(id))  return "Banked Holiday";
@@ -442,20 +445,18 @@ async function processAll(){
 
     const auditRows = absent.map(id=>{
       const x = byId.get(id);
-      const reason = reasonOf(id);
       const b = bucketOf(x) || "Other";
-      return { id, reason, bucket: b, type: x.typ };
+      return { id, department: b, type: x.typ, reason: reasonOf(id) };
     });
 
-    // Render audit summary table
-    const auditAgg = {};
+    const agg = {};
     for (const r of auditRows){
-      const key = `${r.bucket}|${r.type}|${r.reason}`;
-      auditAgg[key] = (auditAgg[key]||0) + 1;
+      const key = `${r.department}|${r.type}|${r.reason}`;
+      agg[key] = (agg[key]||0) + 1;
     }
-    const auditDisplay = Object.entries(auditAgg).map(([k,v])=>{
-      const [bucket,type,reason] = k.split("|");
-      return { Department: bucket, Type: type, Reason: reason, Count: v };
+    const auditDisplay = Object.entries(agg).map(([k,v])=>{
+      const [department,type,reason] = k.split("|");
+      return { Department: department, Type: type, Reason: reason, Count: v };
     }).sort((a,b)=> a.Department.localeCompare(b.Department)||a.Type.localeCompare(b.Type)||a.Reason.localeCompare(b.Reason));
 
     const auditHeader = `<thead>
@@ -466,11 +467,10 @@ async function processAll(){
     )).join("") + "</tbody>";
     auditTable.innerHTML = auditHeader + auditBody;
 
-    // Downloads
     btnNoShow.onclick = ()=>{
       const rows = absent
         .filter(id=>reasonOf(id)==="No-Show")
-        .map(id=>({ id, department: bucketOf(byId.get(id))||"", type: byId.get(id)?.typ||"" }));
+        .map(id=>({ id, department: (byId.get(id) && bucketOf(byId.get(id))) || "", type: byId.get(id)?.typ || "" }));
       downloadCSV(`noshow_${isoDate}.csv`, rows);
     };
     btnAuditCSV.onclick = ()=>{
