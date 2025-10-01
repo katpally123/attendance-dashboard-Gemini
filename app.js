@@ -1,4 +1,8 @@
-// ====== CONFIG ======
+/* =========================================================
+   PXT Attendance Dashboard — app.js (surgical VET/VTO + swap fix)
+   ========================================================= */
+
+/* ---------- SETTINGS ---------- */
 const SETTINGS_URL = "./settings.json";
 const DEFAULT_SETTINGS = {
   departments: {
@@ -7,107 +11,151 @@ const DEFAULT_SETTINGS = {
     ICQA:    { dept_ids: ["1299070","1211070"], management_area_id: "27" },
     CRETs:   { dept_ids: ["1299070","1211070"], management_area_id: "22" }
   },
-  shift_schedule: { Day:{}, Night:{} },
-  present_markers: ["X","Y","YES","TRUE","1"]
+  shift_schedule: { Day: {}, Night: {} },
+  present_markers: ["X","Y","YES","TRUE","1"],
+  swap_mapping: {
+    id: ["Employee 1 ID","Employee ID","Person ID","Person Number","Badge ID","ID","Associate ID","EID"],
+    status: ["Status","Swap Status"],
+    skip_date: ["Date to Skip","Skip Date","Skip"],
+    work_date: ["Date to Work","Work Date","Work"],
+    approved_statuses: ["Approved","Completed","Accepted"]
+  }
 };
 
-// ====== STATE / ELEMS ======
 let SETTINGS = null;
 
-const dateEl   = document.getElementById("dateInput");
-const shiftEl  = document.getElementById("shiftInput");
-const newHireEl= document.getElementById("excludeNewHires");
+/* ---------- DOM ---------- */
+const dateEl        = document.getElementById("dateInput");
+const shiftEl       = document.getElementById("shiftInput");
+const newHireEl     = document.getElementById("excludeNewHires");
 
-const rosterEl = document.getElementById("rosterFile");
-const mytimeEl = document.getElementById("mytimeFile");
-const vacEl    = document.getElementById("vacFile");
-const swapOutEl= document.getElementById("swapOutFile");
-const swapInEl = document.getElementById("swapInFile");
-const vetEl    = document.getElementById("vetFile");
+const rosterEl      = document.getElementById("rosterFile");
+const mytimeEl      = document.getElementById("mytimeFile");
+const vacEl         = document.getElementById("vacFile");
+const swapOutEl     = document.getElementById("swapOutFile");
+const swapInEl      = document.getElementById("swapInFile");
+const vetEl         = document.getElementById("vetFile");
 
-const codesEl  = document.getElementById("codesEl");
-const processBtn = document.getElementById("processBtn");
-const fileStatus = document.getElementById("fileStatus");
+const fileStatus    = document.getElementById("fileStatus");
+const processBtn    = document.getElementById("processBtn");
 
-const replicaTable = document.getElementById("replicaTable");
+const tabDash       = document.getElementById("tabDashboard");
+const tabAudit      = document.getElementById("tabAudit");
+const panelDash     = document.getElementById("panelDashboard");
+const panelAudit    = document.getElementById("panelAudit");
 
-// ====== BOOT ======
+const chipDay       = document.getElementById("chipDay");
+const chipShift     = document.getElementById("chipShift");
+const chipCorners   = document.getElementById("chipCorners");
+const chipCornerSource = document.getElementById("chipCornerSource");
+const chipVacationCount = document.getElementById("chipVacationCount");
+const chipBHCount   = document.getElementById("chipBHCount");
+const chipVacation  = document.getElementById("chipVacation");
+const chipBH        = document.getElementById("chipBH");
+
+const replicaTable  = document.getElementById("replicaTable");
+
+/* ---------- BOOT ---------- */
 (async function boot(){
   try {
     const r = await fetch(SETTINGS_URL, { cache: "no-store" });
     SETTINGS = r.ok ? await r.json() : DEFAULT_SETTINGS;
-  } catch { SETTINGS = DEFAULT_SETTINGS; }
-  initUI();
+  } catch {
+    SETTINGS = DEFAULT_SETTINGS;
+  }
+
+  // tabs
+  tabDash?.addEventListener("click",()=>setTab("dash"));
+  tabAudit?.addEventListener("click",()=>setTab("audit"));
+
+  // defaults
+  if (!dateEl.value) dateEl.value = new Date().toISOString().slice(0,10);
+  chipDay.textContent = new Date(dateEl.value+"T00:00:00").toLocaleDateString("en-US",{weekday:"long"});
+  chipShift.textContent = shiftEl.value || "Day";
+
+  dateEl.addEventListener("change", () => {
+    chipDay.textContent = new Date(dateEl.value+"T00:00:00").toLocaleDateString("en-US",{weekday:"long"});
+  });
+  shiftEl.addEventListener("change", () => {
+    chipShift.textContent = shiftEl.value || "Day";
+  });
+
+  processBtn.addEventListener("click", processAll);
 })();
 
-window.addEventListener("error", ev=>{
-  fileStatus.textContent = "JS error: " + (ev.message || "See console");
-  alert(fileStatus.textContent);
-});
-
-// ====== UI ======
-function initUI(){
-  const today = new Date();
-  dateEl.value = today.toISOString().slice(0,10);
-  shiftEl.value = "Day";
-  renderShiftCodes();
-  dateEl.addEventListener("change", renderShiftCodes);
-  shiftEl.addEventListener("change", renderShiftCodes);
+function setTab(which){
+  const dash = which==="dash";
+  tabDash.classList.toggle("active", dash);
+  tabAudit.classList.toggle("active", !dash);
+  panelDash.classList.toggle("hidden", !dash);
+  panelAudit.classList.toggle("hidden", dash);
 }
 
-function toDayName(iso){ if(!iso) return "Monday"; return new Date(iso+"T00:00:00").toLocaleDateString("en-US",{weekday:"long"}); }
-function renderShiftCodes(){
-  const day = toDayName(dateEl.value);
-  const shift = shiftEl.value;
-  const codes = SETTINGS.shift_schedule?.[shift]?.[day] || [];
-  codesEl.innerHTML = codes.map(c=>`<code>${c}</code>`).join(" ");
+/* ---------- HELPERS ---------- */
+function parseCSVFile(file, opts={header:true, skipFirstLine:false}){
+  return new Promise((resolve,reject)=>{
+    Papa.parse(file,{
+      header: !!opts.header,
+      skipEmptyLines: true,
+      complete: res=>{
+        let rows = res.data || [];
+        if (opts.skipFirstLine && rows.length) rows = rows.slice(1);
+        resolve(rows);
+      },
+      error: err=>reject(err)
+    });
+  });
 }
-
-// ====== HELPERS ======
 const canon = s => String(s||"").trim().toLowerCase().replace(/\s+/g," ");
-const normalizeId = v => {
-  const t = String(v??"").trim(); const d=t.replace(/\D/g,""); const noLead=d.replace(/^0+/,"");
-  return noLead || t;
-};
-const parseDateLoose = s => { const d = new Date(s); return isNaN(d) ? null : d; };
-const presentVal = (val, markers) => markers.includes(String(val||"").trim().toUpperCase());
-function findKey(row, candidates){
-  const keys = Object.keys(row||{});
-  const wanted = candidates.map(canon);
-  for (const k of keys){
-    const ck = canon(k);
-    if (wanted.includes(ck)) return k;
-    if (wanted.includes(ck.replace(/\?/g,""))) return k;
+function findKey(obj, candidates){
+  const keys = Object.keys(obj||{});
+  for (const cand of candidates){
+    const k = keys.find(x=>canon(x)===canon(cand));
+    if (k) return k;
   }
   return null;
 }
-function classifyEmpType(v){
-  const x = canon(v);
-  if (!x) return "UNKNOWN";
-  if (/(amzn|amazon|blue badge|bb|fte|full time|part time|pt)\b/.test(x)) return "AMZN";
-  if (/(temp|temporary|seasonal|agency|vendor|contract|white badge|wb|csg|adecco|randstad)/.test(x)) return "TEMP";
-  return "UNKNOWN";
+function firstKey(o, cands){ return findKey(o,cands) || null; }
+function toISODate(v){
+  if (v == null) return null;
+  const t = String(v).trim();
+  if (!t) return null;
+  let d = new Date(t);
+  if (!isNaN(d)) return d.toISOString().slice(0,10);
+  // mm/dd/yyyy
+  let m = /^(?:(\d{1,2})\/(\d{1,2})\/(\d{4}))$/.exec(t);
+  if (m) return `${m[3]}-${m[1].padStart(2,'0')}-${m[2].padStart(2,'0')}`;
+  // yyyy-mm-dd or yyyy/mm/dd
+  m = /^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})$/.exec(t);
+  if (m) return `${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`;
+  return null;
 }
-function parseCSVFile(file, opts={header:true, skipFirstLine:false}){
-  return new Promise((resolve,reject)=>{
-    const reader = new FileReader();
-    reader.onerror = ()=>reject(new Error("Failed to read file"));
-    reader.onload = ()=>{
-      let text = reader.result;
-      if (opts.skipFirstLine){
-        const i = text.indexOf("\n"); text = i>=0 ? text.slice(i+1) : text;
-      }
-      Papa.parse(text, { header: opts.header, skipEmptyLines: true, transformHeader: h=>h.trim(), complete: res=>resolve(res.data) });
-    };
-    reader.readAsText(file);
-  });
+function normalizeId(v){
+  const t = String(v??"").trim();
+  const d = t.replace(/\D/g,"");
+  const noLead = d.replace(/^0+/,"");
+  return noLead || t;
+}
+function presentVal(val, markers){
+  return (markers||[]).includes(String(val||"").trim().toUpperCase());
+}
+function unique(list){ return [...new Set(list)]; }
+
+// Accept both ISO (yyyy-mm-dd) and legacy (yyyy/mm/dd) date strings
+function dateMatches(val, iso){
+  const isoFromVal = toISODate(val);
+  if (isoFromVal && isoFromVal === iso) return true;
+  const legacy = iso.replace(/-/g,"/");
+  return String(val||"").trim() === legacy;
 }
 
-// ====== PROCESS ======
-processBtn.addEventListener("click", async ()=>{
+/* ---------- CORE ---------- */
+async function processAll(){
   fileStatus.textContent = "Parsing…";
-  try {
-    if (!rosterEl.files[0] || !mytimeEl.files[0]) throw new Error("Upload Roster and MyTime CSVs.");
+  try{
+    if (!rosterEl.files[0] || !mytimeEl.files[0]) {
+      throw new Error("Upload at least Roster and MyTime CSVs.");
+    }
 
     const [rosterRaw, mytimeRaw, vacRaw, swapOutRaw, swapInRaw, vetRaw] = await Promise.all([
       parseCSVFile(rosterEl.files[0], {header:true}),
@@ -119,281 +167,249 @@ processBtn.addEventListener("click", async ()=>{
     ]);
 
     const isoDate = dateEl.value;
-    const targetDateLegacy = isoDate.replace(/-/g,"/"); // still used by some exports
-    const dayName = toDayName(isoDate);
-    const codes = SETTINGS.shift_schedule?.[shiftEl.value]?.[dayName] || [];
-    const markers = (SETTINGS.present_markers || ["X"]).map(s=>String(s).toUpperCase());
+    const dayName = new Date(isoDate+"T00:00:00").toLocaleDateString("en-US",{weekday:"long"});
+    chipDay.textContent = dayName;
+    chipShift.textContent = shiftEl.value;
 
-    // MyTime map
-    const m0 = mytimeRaw[0] || {};
-    const M_ID   = findKey(m0, ["Person ID","Employee ID","Person Number","ID"]);
-    const M_ONPR = findKey(m0, ["On Premises","On Premises?","OnPremises"]);
-    if (!M_ID || !M_ONPR) throw new Error("MyTime must include Person/Employee ID and On Premises.");
-    const onPrem = new Map();
-    for (const r of mytimeRaw){
-      const id = normalizeId(r[M_ID]);
-      const val = presentVal(r[M_ONPR], markers);
-      if (id) onPrem.set(id, (onPrem.get(id)||false) || val);
+    // Corners
+    let cornerCodes = SETTINGS.shift_schedule?.[shiftEl.value]?.[dayName] || [];
+    let cornerSource = "settings";
+    if (!cornerCodes.length){
+      const cornerKey = findKey(rosterRaw[0]||{},["Corner","Corner Code","CornerName","Corner ID"]) || "Corner";
+      cornerCodes = unique(rosterRaw.map(r=>String(r[cornerKey]||"").trim()).filter(Boolean)).slice(0,12);
+      cornerSource = "derived";
     }
+    chipCorners.textContent = cornerCodes.join(", ");
+    chipCornerSource.textContent = cornerSource==="settings" ? "(from settings.json)" : "(derived from Roster)";
 
-    // Vacation (CAN Daily Hours Summary) – filter to selected date and VAC/PTO > 0
-    const vacIds = new Set();
-    if (vacRaw.length){
-      const v0 = vacRaw[0];
-      const V_ID   = findKey(v0, ["Employee ID","Person ID","Person Number","Badge ID","ID"]);
-      const V_DATE = findKey(v0, ["Date","Worked Date","Shift Date","Business Date"]);
-      const V_CODE = findKey(v0, ["Pay Code","PayCode","Earning Code","Absence Name","Absence Type"]);
-      const V_HR   = findKey(v0, ["Hours","Total Hours"]);
-      for (const r of vacRaw){
-        const dOk = !V_DATE || (new Date(r[V_DATE]).toISOString().slice(0,10) === isoDate);
-        const code = String(r[V_CODE]||"").toLowerCase();
-        const hrs = parseFloat(r[V_HR])||0;
-        if (dOk && (code.includes("vac") || code.includes("pto")) && hrs>0){
-          vacIds.add(normalizeId(r[V_ID]));
+    /* ---- MyTime ON-PREMISE (authoritative) ---- */
+    const myOnPrem = new Set();
+    if (mytimeRaw.length){
+      const m0 = mytimeRaw[0] || {};
+      const M_ID  = firstKey(m0, ["Employee ID","Person ID","Person Number","Badge ID","ID","EID"]);
+      const M_ONP = firstKey(m0, ["On Premise","On-Premise","OnPremise","On Site","OnSite","On Prem","On Premises","On Premises?","OnPremises"]);
+      const markers = SETTINGS.present_markers || DEFAULT_SETTINGS.present_markers;
+      if (M_ID && M_ONP){
+        for (const r of mytimeRaw){
+          const id = normalizeId(r[M_ID]); if (!id) continue;
+          if (presentVal(r[M_ONP], markers)) myOnPrem.add(id);
         }
       }
     }
 
-    // ===== VET/VTO (PostingAcceptance) — FIXED =====
-    const vetIds = new Set(), vtoIds = new Set();
-    if (vetRaw.length){
-      const a0 = vetRaw[0];
-
-      // columns
-      const A_ID   = findKey(a0, ["employeeId","Employee ID","Person ID","EID","Person Number"]);
-      const A_TYP  = findKey(a0, ["opportunity.type","Opportunity Type","Type"]);
-      const A_ACC  = findKey(a0, ["opportunity.acceptedCount","Accepted Count","Accepted"]);
-      const A_FLAG = findKey(a0, ["isAccepted"]);
-      // date priority: acceptanceTime -> opportunityCreatedAt -> opportunity.postedDate -> (old) Shift Date/Date/opportunity.date
-      const A_DT1  = findKey(a0, ["acceptanceTime"]);
-      const A_DT2  = findKey(a0, ["opportunityCreatedAt","opportunity.createdAt"]);
-      const A_DT3  = findKey(a0, ["opportunity.postedDate","postedDate"]);
-      const A_DT_FALL = findKey(a0, ["Shift Date","Date","opportunity.date"]);
-
-      const toISO = v => {
-        if (v==null) return null;
-        const s = String(v).trim();
-        if (!s) return null;
-        const d = new Date(s);
-        if (!isNaN(d)) return d.toISOString().slice(0,10);
-        const m = /^(\d{4})\/(\d{1,2})\/(\d{1,2})$/.exec(s); // yyyy/mm/dd
-        if (m) return `${m[1]}-${m[2].padStart(2,"0")}-${m[3].padStart(2,"0")}`;
-        return null;
-      };
-
-      for (const r of vetRaw){
-        const id = normalizeId(r[A_ID]); if (!id) continue;
-
-        // accepted?
-        const accepted = (() => {
-          const c = A_ACC ? String(r[A_ACC]).trim() : "";
-          const countOK = (c==="1" || c===1);
-          const f = A_FLAG ? String(r[A_FLAG]).trim().toLowerCase() : "";
-          const flagOK = (f==="true");
-          return countOK || flagOK;
-        })();
-        if (!accepted) continue;
-
-        // pick date
-        const dISO = toISO(r[A_DT1]) || toISO(r[A_DT2]) || toISO(r[A_DT3]) || toISO(r[A_DT_FALL]);
-        if (!dISO) continue;
-        if (dISO !== isoDate) continue;
-
-        // type
-        const t = String(r[A_TYP]||"").toUpperCase();
-        if (t.includes("VTO")) vtoIds.add(id);
-        else if (t.includes("VET")) vetIds.add(id);
-      }
-    }
-
-    // Swap files (both slots can contain combined exports; read both)
-    const collectSwaps = (rows)=>{
-      const out = [], inn = [];
-      if (!rows.length) return { out, inn };
-      const s0 = rows[0];
-      const S_ID   = findKey(s0, ["Employee 1 ID","Employee ID","Person ID","EID"]);
-      const S_ST   = findKey(s0, ["Status"]);
-      const S_SKIP = findKey(s0, ["Date to Skip","Skip Date"]);
-      const S_WORK = findKey(s0, ["Date to Work","Work Date"]);
-      for (const r of rows){
-        if (String(r[S_ST]).trim()!=="Approved") continue;
-        const id = normalizeId(r[S_ID]);
-        if (!id) continue;
-        if (r[S_SKIP] && String(r[S_SKIP]).trim()===targetDateLegacy) out.push(id);
-        if (r[S_WORK] && String(r[S_WORK]).trim()===targetDateLegacy) inn.push(id);
-      }
-      return { out, inn };
-    };
-    const sA = collectSwaps(swapOutRaw);
-    const sB = collectSwaps(swapInRaw);
-    const swapOutIds = new Set([...sA.out, ...sB.out]);
-    const swapInIds  = new Set([...sA.inn, ...sB.inn]);
-
-    // Roster + headers
+    /* ---- Roster (never used for presence) ---- */
     const r0 = rosterRaw[0] || {};
-    const R_ID   = findKey(r0, ["Employee ID","Person Number","Person ID","Badge ID","ID"]);
-    const R_DEPT = findKey(r0, ["Department ID","Home Department ID","Dept ID"]);
-    const R_AREA = findKey(r0, ["Management Area ID","Mgmt Area ID","Area ID","Area"]);
-    const R_TYPE = findKey(r0, ["Employment Type","Associate Type","Worker Type","Badge Type","Company"]);
-    const R_SP   = findKey(r0, ["Shift Pattern","Schedule Pattern","Shift"]);
-    const R_COR  = findKey(r0, ["Corner","Corner Code"]);
-    const R_START= findKey(r0, ["Employment Start Date","Hire Date","Start Date"]);
-    if (!R_ID || !R_DEPT || !(R_SP||R_COR)) throw new Error("Roster must include Employee ID, Department ID, and Shift Pattern/Corner.");
+    const R_ID   = findKey(r0,["Employee ID","Person ID","Person Number","Badge ID","ID"]);
+    const R_TYP  = findKey(r0,["Employment Type","EmploymentType","Type","Associate Type","Worker Type","Company"]);
+    const R_DEPT = findKey(r0,["Department ID","Department","Dept ID","Dept","Home Department ID"]);
+    const R_AREA = findKey(r0,["Management Area ID","Area ID","Area","Mgmt Area ID"]);
+    const R_COR  = findKey(r0,["Corner","Corner Code","CornerName","Corner ID"]);
+    const R_SP   = findKey(r0,["Shift Pattern","Schedule Pattern","Shift"]);
+    const R_START= findKey(r0,["Employment Start Date","Hire Date","Start Date"]);
+    if (!R_ID || !R_TYP || !R_DEPT) throw new Error("Roster missing required columns (ID, Employment Type, Department).");
 
-    const first2 = s => (s||"").slice(0,2);
-    const firstAndThird = s => (s?.length>=3 ? s[0]+s[2] : "");
-
-    // Enrich roster
+    const cornerFromSP = sp => (sp ? String(sp).slice(0,2) : "");
     let roster = rosterRaw.map(r=>{
       const id = normalizeId(r[R_ID]);
-      const deptId = String(r[R_DEPT]??"").trim();
-      const area = String((R_AREA? r[R_AREA] : "")??"").trim();
-      const typ = classifyEmpType(r[R_TYPE]);
-      const sp  = String((R_SP? r[R_SP] : "")??"");
-      const corner = R_COR ? String(r[R_COR]??"").trim() : first2(sp);
-      const met = firstAndThird(sp);
-      const start = R_START ? parseDateLoose(r[R_START]) : null;
-      const onp = onPrem.get(id) === true; // presence from MyTime map
-      return { id, deptId, area, typ, corner, met, start, onp };
-    });
+      const onp = myOnPrem.has(id); // presence only from MyTime
+      return {
+        id,
+        onp,
+        typ: /TEMP|AGENCY|VENDOR|CONTRACT/i.test(String(r[R_TYP]||"")) ? "TEMP" : "AMZN",
+        deptId: String(r[R_DEPT]||"").trim(),
+        area: String(r[R_AREA]||"").trim(),
+        corner: String(r[R_COR]||"").trim() || cornerFromSP(r[R_SP]),
+        start: r[R_START] ? new Date(r[R_START]) : null
+      };
+    }).filter(x=>x.id);
 
-    // Corner filter
-    roster = roster.filter(x => codes.includes(x.corner));
+    // Corner filter (if codes set)
+    if (cornerCodes.length){
+      roster = roster.filter(x => cornerCodes.includes(x.corner));
+    }
 
-    // Exclude new hires
+    // Exclude new hires (<3 days) if toggled
     if (newHireEl.checked){
-      const d0 = new Date(isoDate+"T00:00:00");
+      const date0 = new Date(isoDate+"T00:00:00");
       roster = roster.filter(x=>{
-        if (!x.start) return true;
-        const days = Math.floor((d0 - x.start)/(1000*60*60*24));
+        if (!x.start || isNaN(x.start)) return true;
+        const days = Math.floor((date0 - x.start)/86400000);
         return days >= 3;
       });
     }
 
-    // Dept checkers
+    const byId = new Map(roster.map(x=>[x.id,x]));
+
+    // Dept buckets
     const cfg = SETTINGS.departments;
     const DA_IDS = cfg.DA.dept_ids;
     const isInbound = x => cfg.Inbound.dept_ids.includes(x.deptId) && !DA_IDS.includes(x.deptId);
     const isDA      = x => DA_IDS.includes(x.deptId);
     const isICQA    = x => cfg.ICQA.dept_ids.includes(x.deptId) && x.area===cfg.ICQA.management_area_id;
     const isCRETs   = x => cfg.CRETs.dept_ids.includes(x.deptId) && x.area===cfg.CRETs.management_area_id;
-    const bucketOf  = x => isInbound(x) ? "Inbound" : isDA(x) ? "DA" : isICQA(x) ? "ICQA" : isCRETs(x) ? "CRETs" : "Other";
-
-    // Lookup maps
-    const byId = new Map(roster.map(x=>[x.id, x]));
-
-    // Base cohort BEFORE exclusions (for % denominator): the “Regular HC (Cohort Expected)”
-    const cohort = roster.slice();
-
-    // Apply exclusions to cohort: Vacation + Swap-Out + VTO
-    const excluded = new Set();
-    for (const id of vacIds) if (byId.has(id)) excluded.add(id);
-    for (const id of swapOutIds) if (byId.has(id)) excluded.add(id);
-    for (const id of vtoIds) if (byId.has(id)) excluded.add(id);
-
-    const cohortExpected = cohort.filter(x => !excluded.has(x.id));
-    const cohortPresentExSwaps = cohort.filter(x => x.onp && !excluded.has(x.id)); // “Regular HC Present (Excluding Swaps)”
-
-    // Swap-In expected & present
-    const swapInExpectedRows = [...swapInIds].map(id => byId.get(id)).filter(Boolean);
-    const swapInPresentRows  = swapInExpectedRows.filter(x => onPrem.get(x.id)===true);
-
-    // VET expected & present
-    const vetExpectedRows = [...vetIds].map(id => byId.get(id)).filter(Boolean);
-    const vetPresentRows  = vetExpectedRows.filter(x => onPrem.get(x.id)===true);
-
-    // Swap-Out detail rows
-    const swapOutRows = [...swapOutIds].map(id => byId.get(id)).filter(Boolean);
-
-    // ---------- aggregators ----------
+    const bucketOf  = x => isInbound(x) ? "Inbound" : isDA(x) ? "DA" : isICQA(x) ? "ICQA" : isCRETs(x) ? "CRETs" : null;
     const depts = ["Inbound","DA","ICQA","CRETs"];
-    const mkTable = () => Object.fromEntries(depts.map(d=>[d, {AMZN:0, TEMP:0, TOTAL:0}]));
-    const countInto = (acc, row) => {
-      const b = bucketOf(row);
-      if (!depts.includes(b)) return;
-      if (row.typ==="AMZN") { acc[b].AMZN++; acc[b].TOTAL++; }
-      else if (row.typ==="TEMP") { acc[b].TEMP++; acc[b].TOTAL++; }
-    };
-    const sumTotals = ACC => {
-      let AMZN=0, TEMP=0, TOTAL=0;
-      for (const d of depts){ AMZN+=ACC[d].AMZN; TEMP+=ACC[d].TEMP; TOTAL+=ACC[d].TOTAL; }
-      return { AMZN, TEMP, TOTAL };
-    };
-    const addRow = (A,B)=> {
-      const R = mkTable();
-      for (const d of depts){
-        R[d].AMZN = A[d].AMZN + B[d].AMZN;
-        R[d].TEMP = A[d].TEMP + B[d].TEMP;
-        R[d].TOTAL= A[d].TOTAL+ B[d].TOTAL;
+    const mkRow = () => Object.fromEntries(depts.map(d=>[d,{AMZN:0,TEMP:0,TOTAL:0}]));
+    const bump = (A,x)=>{ const b=bucketOf(x); if(!b) return; A[b][x.typ]++; A[b].TOTAL++; };
+    const fold = rows => { const A = mkRow(); rows.forEach(x=>bump(A,x)); return A; };
+    const sumTotals = A => depts.reduce((s,d)=>s+(A[d]?.TOTAL||0),0);
+
+    /* ---- Vacation / BH (use your thresholds & codes) ---- */
+    const vacSet = new Set(), bhSet = new Set();
+    if (vacRaw.length){
+      const v0 = vacRaw[0] || {};
+      const V_ID = findKey(v0, ["Employee ID","Person ID","Person Number","Badge ID","ID"]);
+      const V_H  = findKey(v0, ["Hours","Payable Hours","Total Hours","Duration"]);
+      const V_C  = findKey(v0, ["Comment","Pay Code","Description","Pay Reason","Absence Name"]);
+      const V_D  = findKey(v0, ["Date","Worked Date","Shift Date","Business Date","Transaction Date","Posting Date"]);
+      for (const r of vacRaw){
+        const id = normalizeId(r[V_ID]); if (!id) continue;
+        const dtISO = toISODate(r[V_D]); if (dtISO !== isoDate) continue;
+        const hours = parseFloat(String(r[V_H]||"0").replace(/[^\d.]/g,"")) || 0;
+        const codeU = String(r[V_C]||"").toUpperCase();
+        if (hours>=12 && /BANKED|HOLIDAY/.test(codeU)) bhSet.add(id);
+        else if (hours>=10 && /VAC|PTO|VACATION/.test(codeU)) vacSet.add(id);
       }
-      return R;
+    }
+    chipVacationCount.textContent = vacSet.size;
+    chipBHCount.textContent = bhSet.size;
+    chipVacation.onclick = (e)=>{ e.preventDefault(); if (!vacSet.size) return; downloadCSV("vacation_excluded.csv",[...vacSet].map(id=>({id}))); };
+    chipBH.onclick = (e)=>{ e.preventDefault(); if (!bhSet.size) return; downloadCSV("banked_holiday_excluded.csv",[...bhSet].map(id=>({id}))); };
+
+    /* ---- VET/VTO — FIXED (only change) ---- */
+    const vetSet = new Set(), vtoSet = new Set();
+    if (vetRaw.length){
+      const v0 = vetRaw[0] || {};
+      const K_ID    = firstKey(v0, ["employeeId","Employee ID","Person ID","Person Number","Badge ID","ID","EID"]);
+      const K_TYPE  = firstKey(v0, ["opportunity.type","Opportunity Type","Type"]);
+      const K_ACC   = firstKey(v0, ["opportunity.acceptedCount","Accepted Count","Accepted"]);
+      const K_FLAG  = firstKey(v0, ["isAccepted"]);
+      const K_T1    = firstKey(v0, ["acceptanceTime"]);
+      const K_T2    = firstKey(v0, ["opportunityCreatedAt","opportunity.createdAt"]);
+      const K_T3    = firstKey(v0, ["opportunity.postedDate","postedDate","Posting Date"]);
+      const K_TFALL = firstKey(v0, ["Shift Date","Date","opportunity.date"]);
+
+      for (const r of vetRaw){
+        const id = normalizeId(r[K_ID]); if (!id) continue;
+
+        // accepted?
+        const accCountOk = K_ACC ? (String(r[K_ACC]).trim()==="1" || r[K_ACC]===1) : false;
+        const accFlagOk  = K_FLAG ? String(r[K_FLAG]).trim().toLowerCase()==="true" : false;
+        if (!(accCountOk || accFlagOk)) continue;
+
+        // date priority
+        const dISO = toISODate(r[K_T1]) || toISODate(r[K_T2]) || toISODate(r[K_T3]) || toISODate(r[K_TFALL]);
+        if (dISO !== isoDate) continue;
+
+        const typ = String(r[K_TYPE]||"").toUpperCase();
+        if (typ.includes("VTO")) vtoSet.add(id);
+        else if (typ.includes("VET")) vetSet.add(id);
+      }
+    }
+
+    /* ---- Swaps (only date-matching changed) ---- */
+    function collectSwaps(rows, mapping){
+      if (!rows.length) return {out:[], inn:[]};
+      const S_ID   = findKey(rows[0]||{}, mapping.id) || "";
+      const S_ST   = findKey(rows[0]||{}, mapping.status) || "";
+      const S_SKIP = findKey(rows[0]||{}, mapping.skip_date) || "";
+      const S_WORK = findKey(rows[0]||{}, mapping.work_date) || "";
+      const APPROVED = (mapping.approved_statuses||[]).map(s=>s.toUpperCase());
+      const OUT=[], IN=[];
+      for (const r of rows){
+        const id = normalizeId(r[S_ID]); if (!id) continue;
+        const st = String(r[S_ST] ?? "Approved").toUpperCase();
+        const ok = !S_ST || APPROVED.includes(st) || /APPROVED|COMPLETED|ACCEPTED/.test(st);
+        if (!ok) continue;
+        if (dateMatches(r[S_SKIP], isoDate)) OUT.push(id);
+        if (dateMatches(r[S_WORK], isoDate)) IN.push(id);
+      }
+      return {out:OUT, inn:IN};
+    }
+    const mapping = SETTINGS.swap_mapping || DEFAULT_SETTINGS.swap_mapping;
+    const S1 = collectSwaps(swapOutRaw, mapping);
+    const S2 = collectSwaps(swapInRaw,  mapping);
+    const swapOutSet = new Set([...S1.out, ...S2.out]);
+    const swapInSet  = new Set([...S1.inn, ...S2.inn]);
+
+    /* ---- Cohorts (unchanged) ----
+       Exclude: Vacation > Banked Holiday > VTO > Swap-Out from EXPECTED. */
+    const excluded = new Set();
+    for (const id of vacSet) if (byId.has(id)) excluded.add(id);
+    for (const id of bhSet)  if (byId.has(id) && !excluded.has(id)) excluded.add(id);
+    for (const id of vtoSet) if (byId.has(id) && !excluded.has(id)) excluded.add(id);
+    for (const id of swapOutSet) if (byId.has(id) && !excluded.has(id)) excluded.add(id);
+
+    const cohortExpected         = roster.filter(x=>!excluded.has(x.id));
+    const cohortPresentExSwaps   = cohortExpected.filter(x=>x.onp);
+
+    // Rows for display
+    const swapOutRows            = [...swapOutSet].map(id=>byId.get(id)).filter(Boolean);
+    const swapInExpectedRows     = [...swapInSet].map(id=>byId.get(id)).filter(Boolean);
+    const swapInPresentRows      = swapInExpectedRows.filter(x=>x.onp);
+
+    const vetExpectedRows        = [...vetSet].map(id=>byId.get(id)).filter(Boolean);
+    const vetPresentRows         = vetExpectedRows.filter(x=>x.onp);
+
+    const row_RegularExpected    = fold(cohortExpected);
+    const row_RegularPresentExS  = fold(cohortPresentExSwaps);
+    const row_SwapOut            = fold(swapOutRows);
+    const row_SwapInExpected     = fold(swapInExpectedRows);
+    const row_SwapInPresent      = fold(swapInPresentRows);
+    const row_VTO                = fold([...vtoSet].map(id=>byId.get(id)).filter(Boolean));
+    const row_VETExpected        = fold(vetExpectedRows);
+    const row_VETPresent         = fold(vetPresentRows);
+
+    /* ---- Render (exactly your structure; no extra rows) ---- */
+    const header = `<thead>
+      <tr>
+        <th>Attendance Details</th>
+        ${depts.map(d=>`<th>${d} AMZN</th><th>${d} TEMP</th>`).join("")}
+        <th>Day 1 HC</th>
+      </tr>
+    </thead>`;
+
+    const rowHTML = (label, ACC)=>{
+      const cells = depts.map(d=>`<td>${ACC[d].AMZN}</td><td>${ACC[d].TEMP}</td>`).join("");
+      const total = sumTotals(ACC);
+      return `<tr><td>${label}</td>${cells}<td>${total}</td></tr>`;
     };
 
-    // Build rows
-    const row_RegularExpected   = mkTable(); cohortExpected.forEach(x=>countInto(row_RegularExpected, x));
-    const row_RegularPresentExS = mkTable(); cohortPresentExSwaps.forEach(x=>countInto(row_RegularPresentExS, x));
-    const row_SwapOut           = mkTable(); swapOutRows.forEach(x=>countInto(row_SwapOut, x));
-    const row_SwapInExpected    = mkTable(); swapInExpectedRows.forEach(x=>countInto(row_SwapInExpected, x));
-    const row_SwapInPresent     = mkTable(); swapInPresentRows.forEach(x=>countInto(row_SwapInPresent, x));
-    const row_VTO               = mkTable(); [...vtoIds].map(id=>byId.get(id)).filter(Boolean).forEach(x=>countInto(row_VTO, x));
-    const row_VETAccepted       = mkTable(); vetExpectedRows.forEach(x=>countInto(row_VETAccepted, x));
-    const row_VETPresent        = mkTable(); vetPresentRows.forEach(x=>countInto(row_VETPresent, x));
-
-    // Grand totals including VET + Swap (excl VTO)
-    const row_TotalExpectedIncl = addRow(addRow(row_RegularExpected, row_SwapInExpected), row_VETAccepted);
-    const row_TotalShowedIncl   = addRow(addRow(row_RegularPresentExS, row_SwapInPresent), row_VETPresent);
-
-    const totalsExp = sumTotals(row_TotalExpectedIncl);
-    const totalsShow= sumTotals(row_TotalShowedIncl);
-    const pctShow   = (totalsExp.TOTAL>0) ? (100*totalsShow.TOTAL/totalsExp.TOTAL) : 0;
-
-    // Department-level regular attendance %
-    const pctDept = {};
-    for (const d of depts){
-      const a = row_RegularExpected[d].TOTAL || 0;
-      const b = row_RegularPresentExS[d].TOTAL || 0;
-      pctDept[d] = a>0 ? (100*b/a) : 0;
-    }
-
-    // ====== Render table (replica style) ======
-    const header = `
-      <thead>
-        <tr>
-          <th>Attendance Details</th>
-          ${depts.map(d=>`<th>${d} AMZN</th><th>${d} TEMP</th>`).join("")}
-          <th>Day 1 HC</th>
-        </tr>
-      </thead>`;
-    function tr(label, ACC, showTotal=true, pctRow=false){
-      const cells = depts.map(d=>`<td>${ACC[d].AMZN}</td><td>${ACC[d].TEMP}</td>`).join("");
-      const total = sumTotals(ACC).TOTAL;
-      const last = pctRow ? `${pctDept[depts[0]].toFixed(2)}% / ${pctDept[depts[1]].toFixed(2)}% / ${pctDept[depts[2]].toFixed(2)}% / ${pctDept[depts[3]].toFixed(2)}%`
-                          : total;
-      return `<tr><td>${label}</td>${cells}<td>${showTotal ? last : ""}</td></tr>`;
-    }
-    function trPercent(label, percent){
-      return `<tr><td>${label}</td>${depts.map(_=>`<td class="dim">—</td><td class="dim">—</td>`).join("")}<td>${percent.toFixed(2)}%</td></tr>`;
-    }
+    // Regular Attendance % row content (per your UI)
+    const pctParts = depts.map(d=>{
+      const exp = row_RegularExpected[d].TOTAL || 0;
+      const pre = row_RegularPresentExS[d].TOTAL || 0;
+      const pct = exp ? (100*pre/exp) : 0;
+      return `${pct.toFixed(2)}%`;
+    }).join(" / ");
+    const pctRow = `<tr><td>Regular Attendance %</td>${depts.map(d=>`<td>${row_RegularPresentExS[d].AMZN}</td><td>${row_RegularPresentExS[d].TEMP}</td>`).join("")}<td>${pctParts}</td></tr>`;
 
     replicaTable.innerHTML = header + "<tbody>"
-      + tr("Regular HC (Cohort Expected)", row_RegularExpected)
-      + tr("Regular HC Present (Excluding Swaps)", row_RegularPresentExS)
-      + tr("Shift Swap Out", row_SwapOut)
-      + tr("Shift Swap Expected", row_SwapInExpected)
-      + tr("Shift Swap Present", row_SwapInPresent)
-      + tr("Regular Attendance %", row_RegularPresentExS, true, true)
-      + tr("VTO", row_VTO)
-      + tr("VET Accepted", row_VETAccepted)
-      + tr("VET Present", row_VETPresent)
-      + tr("Total HC expected incl VET + Shift Swap (excl VTO)", row_TotalExpectedIncl)
-      + tr("Total Showed incl VET + Shift Swap (excl VTO)", row_TotalShowedIncl)
-      + trPercent("Total Percentage Showed incl VET & Shift Swap (excl VTO)", pctShow)
+      + rowHTML("Regular HC (Cohort Expected)", row_RegularExpected)
+      + rowHTML("Regular HC Present (Excluding Swaps)", row_RegularPresentExS)
+      + rowHTML("Shift Swap Out", row_SwapOut)
+      + rowHTML("Shift Swap Expected", row_SwapInExpected)
+      + rowHTML("Shift Swap Present", row_SwapInPresent)
+      + pctRow
+      + rowHTML("VTO", row_VTO)
+      + rowHTML("VET Accepted", row_VETExpected)
+      + rowHTML("VET Present", row_VETPresent)
       + "</tbody>";
 
-    fileStatus.textContent = `Done • Expected ${totalsExp.TOTAL}, Showed ${totalsShow.TOTAL} → ${pctShow.toFixed(2)}%`;
-  } catch (e){
+    fileStatus.textContent = "Done";
+  }catch(e){
     console.error(e);
-    fileStatus.textContent = "Error";
-    alert(e.message || "Processing failed");
+    fileStatus.textContent = e.message || "Error";
+    alert(e.message || "Failed to process files. Check console for details.");
   }
-});
+}
+
+/* ---------- CSV export helper (used by chips) ---------- */
+function downloadCSV(filename, rows){
+  const csv = Papa.unparse(rows);
+  const blob = new Blob([csv], {type:"text/csv;charset=utf-8"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
