@@ -308,28 +308,30 @@ async function processAll(){
     }
 
     // ====== PostingAcceptance: VET/VTO (SOP: Status -> AcceptedCount=1 -> Date) ======
-    /* ---- VET/VTO (updated for PostingAcceptance headers) ---- */
+/* ---- VET/VTO (PostingAcceptance, SOP-aligned) ---- */
 const vetSet = new Set(), vtoSet = new Set();
 if (vetRaw.length){
   const a0 = vetRaw[0];
 
-  const A_ID   = findKey(a0, ["employeeId","Employee ID","Person ID","EID","Person Number"]);
+  const A_ID   = findKey(a0, ["employeeId","Employee ID"]);
   const A_TYP  = findKey(a0, ["opportunity.type","Opportunity Type","Type"]);
-  const A_ACC  = findKey(a0, ["opportunity.acceptedCount","Accepted Count","Accepted"]);
+  const A_ACC  = findKey(a0, ["opportunity.acceptedCount","Accepted Count"]);
   const A_FLAG = findKey(a0, ["isAccepted"]);
+  const A_S1   = findKey(a0, ["opportunity.shiftStart","shiftStart"]);
+  const A_S2   = findKey(a0, ["opportunity.shiftEnd","shiftEnd"]);
   const A_T1   = findKey(a0, ["acceptanceTime"]);
-  const A_T2   = findKey(a0, ["opportunityCreatedAt","opportunity.createdAt"]);
+  const A_T2   = findKey(a0, ["opportunityCreatedAt"]);
 
   for (const r of vetRaw){
     const id = normalizeId(r[A_ID]); if (!id) continue;
 
     // accepted if acceptedCount===1 OR isAccepted===true
-    const accCountOk = A_ACC ? (String(r[A_ACC]).trim() === "1" || r[A_ACC] === 1) : false;
-    const accFlagOk  = A_FLAG ? String(r[A_FLAG]).trim().toLowerCase() === "true" : false;
+    const accCountOk = A_ACC ? (String(r[A_ACC]).trim()==="1" || r[A_ACC]===1) : false;
+    const accFlagOk  = A_FLAG ? String(r[A_FLAG]).trim().toLowerCase()==="true" : false;
     if (!(accCountOk || accFlagOk)) continue;
 
-    // date priority: acceptanceTime -> opportunityCreatedAt
-    const dISO = toISODate(r[A_T1]) || toISODate(r[A_T2]);
+    // date priority: shiftStart -> shiftEnd -> acceptanceTime -> opportunityCreatedAt
+    const dISO = toISODate(r[A_S1]) || toISODate(r[A_S2]) || toISODate(r[A_T1]) || toISODate(r[A_T2]);
     if (dISO !== isoDate) continue;
 
     const typ = String(r[A_TYP]||"").toUpperCase();
@@ -337,7 +339,6 @@ if (vetRaw.length){
     else if (typ.includes("VET")) vetSet.add(id);
   }
 }
-
     // ====== Swaps ======
     const collectSwaps=(rows,mapping)=>{
       const out=[], inn=[];
