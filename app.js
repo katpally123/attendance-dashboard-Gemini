@@ -308,7 +308,7 @@ async function processAll(){
     }
 
     // ====== PostingAcceptance: VET/VTO (SOP: Status -> AcceptedCount=1 -> Date) ======
-/* ---- VET/VTO (PostingAcceptance, SOP-aligned) ---- */
+/* ---- VET/VTO (PostingAcceptance, SOP-aligned + Voluntary* mapping) ---- */
 const vetSet = new Set(), vtoSet = new Set();
 if (vetRaw.length){
   const a0 = vetRaw[0];
@@ -322,21 +322,40 @@ if (vetRaw.length){
   const A_T1   = findKey(a0, ["acceptanceTime"]);
   const A_T2   = findKey(a0, ["opportunityCreatedAt"]);
 
+  // helper to map different labels to VET/VTO
+  const classifyType = (raw) => {
+    const t = String(raw || "").toLowerCase();
+    if (/(^|[^a-z])vto([^a-z]|$)|voluntary\s*time\s*off|time\s*off/.test(t)) return "VTO";
+    if (/(^|[^a-z])vet([^a-z]|$)|voluntary\s*over\s*time|voluntaryovertime|over\s*time|overtime/.test(t)) return "VET";
+    return null;
+  };
+
+  const seen = new Set(); // de-dupe by id-date-type
+
   for (const r of vetRaw){
-    const id = normalizeId(r[A_ID]); if (!id) continue;
+    const idRaw = r[A_ID];
+    const id = normalizeId(idRaw);
+    if (!id) continue;                // skip NA/blank ids
 
     // accepted if acceptedCount===1 OR isAccepted===true
-    const accCountOk = A_ACC ? (String(r[A_ACC]).trim()==="1" || r[A_ACC]===1) : false;
-    const accFlagOk  = A_FLAG ? String(r[A_FLAG]).trim().toLowerCase()==="true" : false;
+    const accCountOk = A_ACC ? (String(r[A_ACC]).trim() === "1" || r[A_ACC] === 1) : false;
+    const accFlagOk  = A_FLAG ? String(r[A_FLAG]).trim().toLowerCase() === "true" : false;
     if (!(accCountOk || accFlagOk)) continue;
 
     // date priority: shiftStart -> shiftEnd -> acceptanceTime -> opportunityCreatedAt
     const dISO = toISODate(r[A_S1]) || toISODate(r[A_S2]) || toISODate(r[A_T1]) || toISODate(r[A_T2]);
     if (dISO !== isoDate) continue;
 
-    const typ = String(r[A_TYP]||"").toUpperCase();
-    if (typ.includes("VTO")) vtoSet.add(id);
-    else if (typ.includes("VET")) vetSet.add(id);
+    const tClass = classifyType(r[A_TYP]);
+    if (!tClass) continue;
+
+    // de-duplication
+    const key = `${id}|${dISO}|${tClass}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    if (tClass === "VTO") vtoSet.add(id);
+    else if (tClass === "VET") vetSet.add(id);
   }
 }
     // ====== Swaps ======
