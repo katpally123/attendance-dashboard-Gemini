@@ -308,167 +308,52 @@ async function processAll(){
     }
 
     // ====== PostingAcceptance: VET/VTO (SOP: Status -> AcceptedCount=1 -> Date) ======
-/* ---- VET/VTO (workgroup-aware, SOP-aligned — INBOUND wins over DA, Customer returns => CRETs) ---- */
+// ====== PostingAcceptance: VET/VTO (SOP-aligned, First-Dept Workgroup Rule) ======
 const vetSet = new Set(), vtoSet = new Set();
-const vetDetail = []; // optional debug rows
-const vtoDetail = [];
+if (vetRaw.length) {
+    const a0 = vetRaw[0];
+    const A_ID   = findKey(a0, ["employeeId", "Employee ID"]);
+    const A_TYP  = findKey(a0, ["opportunity.type", "Opportunity Type","Type"]);
+    const A_ACC  = findKey(a0, ["opportunity.acceptedCount","Accepted Count"]);
+    const A_FLAG = findKey(a0, ["isAccepted"]);
+    const A_S1   = findKey(a0, ["opportunity.shiftStart","shiftStart"]);
+    const A_S2   = findKey(a0, ["opportunity.shiftEnd","shiftEnd"]);
+    const A_T1   = findKey(a0, ["acceptanceTime"]);
+    const A_T2   = findKey(a0, ["opportunityCreatedAt"]);
+    const A_WG   = findKey(a0, ["workgroups","Workgroups"]);
 
-if (vetRaw.length){
-  const a0 = vetRaw[0];
+    for (const r of vetRaw) {
+        const id = normalizeId(r[A_ID]);
+        if (!id) continue;
 
-  // headers
-  const A_ID      = findKey(a0, ["employeeId","Employee ID"]);
-  const A_TYP     = findKey(a0, ["opportunity.type","Opportunity Type","Type"]);
-  const A_ACC     = findKey(a0, ["opportunity.acceptedCount","Accepted Count"]);
-  const A_FLAG    = findKey(a0, ["isAccepted"]);
-  const A_S1      = findKey(a0, ["opportunity.shiftStart","shiftStart"]);
-  const A_S2      = findKey(a0, ["opportunity.shiftEnd","shiftEnd"]);
-  const A_T1      = findKey(a0, ["acceptanceTime"]);
-  const A_T2      = findKey(a0, ["opportunityCreatedAt","opportunity.createdAt"]);
-  const A_WG      = findKey(a0, ["workgroups","workgroup","workGroups"]);
-  const A_SITE    = findKey(a0, ["opportunity.siteId","site.id","siteId","employeeHomeSite"]);
+        // accepted if acceptedCount==1 OR isAccepted==true
+        const accCountOk = A_ACC ? (String(r[A_ACC]).trim() === "1" || r[A_ACC] === 1) : false;
+        const accFlagOk  = A_FLAG ? String(r[A_FLAG]).trim().toLowerCase() === "true" : false;
+        if (!(accCountOk || accFlagOk)) continue;
 
-  // classify raw opportunity.type -> VET or VTO
-  const classifyType = (raw) => {
-    const t = String(raw || "").toLowerCase();
-    if (/vto|voluntary\s*time\s*off|time\s*off/.test(t)) return "VTO";
-    if (/vet|voluntary\s*over\s*time|voluntaryovertime|overtime|voluntary\s*overtime/.test(t)) return "VET";
-    return null;
-  };
-
-  // map workgroups text -> dashboard bucket, with INBOUND taking priority over DA
-  const mapWorkgroupToBucket = (wg) => {
-    if (!wg) return null;
-    const s = String(wg||"").toLowerCase();
-
-    // inbound wins if both inbound & da are present
-    if (s.includes("inbound")) return "Inbound";
-
-    // otherwise check DA / Delivery
-    if (/\bda\b|delivery/.test(s)) return "DA";
-
-    // ICQA variants
-    if (s.includes("ic/qa") || s.includes("icqa") || /\bic\b|\bqa\b/.test(s)) return "ICQA";
-
-    // Customer returns / Returns / CRETs -> CRETs (explicit)
-    if (s.includes("customer returns") || s.includes("returns") || s.includes("crets") || s.includes("return")) return "CRETs";
-
-    // Admin categories -> ADMIN (excluded)
-    if (s.includes("admin") || s.includes("hr") || s.includes("it")) return "ADMIN";
-
-    // try comma-separated tokens (defensive)
-    const tokens = s.split(/[,;|]/).map(x=>x.trim());
-    for (const t of tokens){
-      if (t.includes("inbound")) return "Inbound";
-    }
-    for (const t of tokens){
-      if (/\bda\b|delivery/.test(t)) return "DA";
-    }
-    for (const t of tokens){
-      if (t.includes("customer") || t.includes("return") || t.includes("crets")) return "CRETs";
-    }
-    for (const t of tokens){
-      if (t.includes("ic") || t.includes("qa")) return "ICQA";
-    }
-    for (const t of tokens){
-      if (t.includes("admin") || t.includes("hr") || t.includes("it")) return "ADMIN";
-    }
-    return null;
-  };
-
-  // strict normalization to avoid duplicates due to formatting differences
-  const strictNormalize = s => {
-    const raw = String(s || "").trim();
-    const digits = raw.replace(/\D/g,"");
-    return digits ? digits.replace(/^0+/,"") : raw.toLowerCase();
-  };
-
-  // dedupe keys: id|date|type|bucket
-  const seen = new Set();
-
-  // Optional: apply site filter if needed. Set MY_SITE to your site code or null to skip.
-  const MY_SITE = null; // set e.g. "YHM2" if you want to filter by site
-
-  for (const r of vetRaw){
-    // employee id
-    const idRaw = r[A_ID];
-    const idNorm = strictNormalize(idRaw);
-    if (!idNorm || idNorm.toLowerCase()==="na") continue;
-
-    // site check (if present)
-    const siteVal = A_SITE ? String(r[A_SITE]||"").trim() : "";
-    if (MY_SITE && siteVal && siteVal !== MY_SITE) continue;
-
-    // acceptance check
-    const accCountOk = A_ACC ? (String(r[A_ACC]).trim()==="1" || r[A_ACC]===1) : false;
-    const accFlagOk  = A_FLAG ? String(r[A_FLAG]).trim().toLowerCase()==="true" : false;
-    if (!(accCountOk || accFlagOk)) continue;
-
-    // date priority: shiftStart -> shiftEnd -> acceptanceTime -> opportunityCreatedAt
-    const dISO = toISODate(r[A_S1]) || toISODate(r[A_S2]) || toISODate(r[A_T1]) || toISODate(r[A_T2]);
-    if (!dISO || dISO !== isoDate) continue;
-
-    // classify type (VET / VTO)
-    const typeClass = classifyType(r[A_TYP]);
-    if (!typeClass) continue;
-
-    // determine bucket: try workgroups first, then fallback to roster if ambiguous
-    const wg = A_WG ? String(r[A_WG]||"") : "";
-    let bucket = mapWorkgroupToBucket(wg);
-
-    // If workgroup is ADMIN, treat as ADMIN and exclude from HC buckets
-    if (bucket === "ADMIN") {
-      // record for diagnostics but skip allocation
-      (typeClass === "VET" ? vetDetail : vtoDetail).push({ idRaw, idNorm, bucket, dISO, typeClass, reason: "workgroup-admin" });
-      continue;
-    }
-
-    // if ambiguous or null, fallback to roster byId
-    if (!bucket) {
-      const rosterEntry = byId.get(idNorm) || byId.get(normalizeId(idRaw));
-      if (rosterEntry) {
-        const deptId = rosterEntry.deptId;
-        const area = rosterEntry.area;
-        if (SETTINGS && SETTINGS.departments) {
-          const cfg = SETTINGS.departments;
-          if (cfg.Inbound && cfg.Inbound.dept_ids && cfg.Inbound.dept_ids.includes(deptId) && !(cfg.DA && cfg.DA.dept_ids && cfg.DA.dept_ids.includes(deptId))) bucket = "Inbound";
-          else if (cfg.DA && cfg.DA.dept_ids && cfg.DA.dept_ids.includes(deptId)) bucket = "DA";
-          else if (cfg.ICQA && cfg.ICQA.dept_ids && cfg.ICQA.dept_ids.includes(deptId) && String(area) === String(cfg.ICQA.management_area_id)) bucket = "ICQA";
-          else if (cfg.CRETs && cfg.CRETs.dept_ids && cfg.CRETs.dept_ids.includes(deptId) && String(area) === String(cfg.CRETs.management_area_id)) bucket = "CRETs";
-          else bucket = null;
-        } else {
-          bucket = null;
+        // workgroup → bucket (first token wins)
+        let bucket = "";
+        if (A_WG && r[A_WG]) {
+            const wg = String(r[A_WG]).split(/[\/,|]/)[0].trim().toLowerCase();
+            if (wg.includes("inbound")) bucket = "Inbound";
+            else if (wg.includes("da") || wg.includes("delivery")) bucket = "DA";
+            else if (wg.includes("ic") || wg.includes("qa") || wg.includes("icqa")) bucket = "ICQA";
+            else if (wg.includes("cret") || wg.includes("return")) bucket = "CRETs";
+            else if (wg.includes("admin") || wg.includes("hr") || wg.includes("it")) continue; // ignore admin
         }
-      }
+
+        // fallback if bucket not resolved
+        if (!bucket) continue;
+
+        // assign to correct set
+        const type = (r[A_TYP] || "").toLowerCase();
+        if (type.includes("overtime") || type.includes("vet")) {
+            vetSet.add(id + "|" + bucket);
+        } else if (type.includes("timeoff") || type.includes("vto")) {
+            vtoSet.add(id + "|" + bucket);
+        }
     }
-
-    // if still no bucket, skip (but log)
-    if (!bucket) {
-      (typeClass === "VET" ? vetDetail : vtoDetail).push({ idRaw, idNorm, wg, siteVal, dISO, typeClass, reason: "no-bucket" });
-      continue;
-    }
-
-    // enforce INBOUND wins over DA if both present in workgroups string:
-    // mapWorkgroupToBucket already returns Inbound early if "inbound" present, so this condition is covered.
-
-    // dedupe
-    const key = `${idNorm}|${dISO}|${typeClass}|${bucket}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-
-    // store as id@@bucket to keep bucket awareness
-    if (typeClass === "VET") {
-      vetSet.add(`${idNorm}@@${bucket}`);
-      vetDetail.push({ idRaw, idNorm, bucket, dISO, typeClass, opportunityId: r['opportunity.id'] || r['opportunityId'] || '' });
-    } else if (typeClass === "VTO") {
-      vtoSet.add(`${idNorm}@@${bucket}`);
-      vtoDetail.push({ idRaw, idNorm, bucket, dISO, typeClass, opportunityId: r['opportunity.id'] || r['opportunityId'] || '' });
-    }
-  }
 }
-
-// After this block, vetSet and vtoSet contain strings like "12345@@Inbound".
-// When you remove/add expected HC or check presence, split on '@@' to get id and bucket.
     // ====== Swaps ======
     const collectSwaps=(rows,mapping)=>{
       const out=[], inn=[];
