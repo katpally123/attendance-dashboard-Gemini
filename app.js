@@ -308,64 +308,104 @@ async function processAll(){
     }
 
     // ====== PostingAcceptance: VET/VTO (SOP: Status -> AcceptedCount=1 -> Date) ======
-// ====== PostingAcceptance: VET/VTO (Roster-only; no bucket requirement) ======
-const vetSet = new Set(), vtoSet = new Set();
+// ====== PostingAcceptance: VET/VTO (Roster-only, strict dedupe, VTO-wins) ======
+const vetSet = new Set(); // final: employee ids who accepted VET (per day)
+const vtoSet = new Set(); // final: employee ids who accepted VTO (per day)
 
 if (vetRaw && vetRaw.length) {
   const a0   = vetRaw[0];
 
-  const A_ID  = findKey(a0, ["employeeId","Employee ID"]);
-  const A_TYP = findKey(a0, ["opportunity.type","Opportunity Type","Type"]);
-  const A_ACC = findKey(a0, ["opportunity.acceptedCount","Accepted Count"]);
-  const A_FLG = findKey(a0, ["isAccepted"]);
-  const A_S1  = findKey(a0, ["opportunity.shiftStart","shiftStart"]);
-  const A_S2  = findKey(a0, ["opportunity.shiftEnd","shiftEnd"]);
-  const A_T1  = findKey(a0, ["acceptanceTime"]);
-  const A_T2  = findKey(a0, ["opportunityCreatedAt","opportunity.createdAt"]);
+  const A_ID   = findKey(a0, ["employeeId","Employee ID"]);
+  const A_TYP  = findKey(a0, ["opportunity.type","Opportunity Type","Type"]);
+  const A_ACC  = findKey(a0, ["opportunity.acceptedCount","Accepted Count"]);
+  const A_FLG  = findKey(a0, ["isAccepted"]);
+  const A_S1   = findKey(a0, ["opportunity.shiftStart","shiftStart"]);
+  const A_S2   = findKey(a0, ["opportunity.shiftEnd","shiftEnd"]);
+  const A_T1   = findKey(a0, ["acceptanceTime"]);
+  const A_T2   = findKey(a0, ["opportunityCreatedAt","opportunity.createdAt"]);
+  const A_OPID = findKey(a0, ["opportunity.id","opportunityId","Opportunity Id"]);
 
-  const strictNormalize = s => {
+  const normId = s => {
     const raw = String(s||"").trim();
     const digits = raw.replace(/\D/g,"");
     return digits ? digits.replace(/^0+/, "") : raw.toLowerCase();
   };
 
   const classifyType = (raw) => {
-    const t = String(raw||"").toLowerCase();
-    if (t.includes("vto") || /voluntary\s*time\s*off|time\s*off|voluntarytimeoff/.test(t)) return "VTO";
-    if (t.includes("vet") || /voluntary\s*overtime|voluntaryovertime|overtime/.test(t)) return "VET";
+    const t = String(raw||"").toLowerCase().replace(/\s+/g,"");
+    if (t.includes("vto") || t.includes("voluntarytimeoff") || /timeoff/.test(t)) return "VTO";
+    if (t.includes("vet") || t.includes("voluntaryovertime") || /overtime/.test(t)) return "VET";
     return null;
   };
 
-  const seen = new Set(); // id|date|type
+  // diagnostics
+  let seenRows=0, accPass=0, datePass=0, typePass=0, inRoster=0, keptAfterDedupe=0;
+
+  // first-level dedupe by (id|date|type|opportunityId)
+  const firstLevel = new Set();
+  // collect second-level by (id|date|type)
+  const perType = { VET: new Set(), VTO: new Set() };
 
   for (const r of vetRaw) {
+    seenRows++;
+
     const idRaw  = r[A_ID];
-    const idNorm = strictNormalize(idRaw);
+    const idNorm = normId(idRaw);
     if (!idNorm || idNorm === "na") continue;
 
     // accepted? (acceptedCount==1 OR isAccepted==true)
     const accCountOk = A_ACC ? (String(r[A_ACC]).trim() === "1" || r[A_ACC] === 1) : false;
     const accFlagOk  = A_FLG ? (String(r[A_FLG]).trim().toLowerCase() === "true") : false;
     if (!(accCountOk || accFlagOk)) continue;
+    accPass++;
 
     // date: shiftStart -> shiftEnd -> acceptanceTime -> createdAt
     const dISO = toISODate(r[A_S1]) || toISODate(r[A_S2]) || toISODate(r[A_T1]) || toISODate(r[A_T2]);
     if (dISO !== isoDate) continue;
+    datePass++;
 
-    // MUST be in roster; if not found, skip (no workgroup fallback)
-    const rosterEntry = byId.get(idNorm) || byId.get(normalizeId(idRaw));
-    if (!rosterEntry) continue;
-
+    // classify type
     const tClass = classifyType(r[A_TYP]);
     if (!tClass) continue;
+    typePass++;
 
-    const key = `${idNorm}|${dISO}|${tClass}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
+    // must exist in roster
+    const rosterEntry = byId.get(idNorm) || byId.get(normalizeId(idRaw));
+    if (!rosterEntry) continue;
+    inRoster++;
 
-    if (tClass === "VET") vetSet.add(idNorm);
-    else vtoSet.add(idNorm);
+    const oppId = A_OPID ? (r[A_OPID] || "") : "";
+    const k1 = `${idNorm}|${dISO}|${tClass}|${oppId}`;
+    if (firstLevel.has(k1)) continue;
+    firstLevel.add(k1);
+
+    const k2 = `${idNorm}|${dISO}|${tClass}`;
+    perType[tClass].add(k2);
   }
+
+  // second-level collapse to one per (id|date|type)
+  // then apply conflict policy: if both VTO and VET exist for same (id|date), prefer VTO
+  const idsVTO = new Set(Array.from(perType.VTO).map(k => k.split("|")[0] + "|" + k.split("|")[1]));
+  const idsVET = new Set(Array.from(perType.VET).map(k => k.split("|")[0] + "|" + k.split("|")[1]));
+
+  // VTO wins: remove any VET where the same id+date appears in VTO
+  for (const pair of idsVET) {
+    if (!idsVTO.has(pair)) {
+      const idOnly = pair.split("|")[0];
+      vetSet.add(idOnly);
+      keptAfterDedupe++; // counting as we add
+    }
+  }
+  for (const pair of idsVTO) {
+    const idOnly = pair.split("|")[0];
+    vtoSet.add(idOnly);
+    keptAfterDedupe++;
+  }
+
+  console.log("VET/VTO roster-only summary:", {
+    seenRows, accPass, datePass, typePass, inRoster,
+    vetCount: vetSet.size, vtoCount: vtoSet.size, keptAfterDedupe
+  });
 }
     // ====== Swaps ======
     const collectSwaps=(rows,mapping)=>{
