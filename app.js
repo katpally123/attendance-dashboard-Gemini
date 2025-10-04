@@ -149,6 +149,20 @@ function classifyEmpType(v){
   if (/(temp|temporary|seasonal|agency|vendor|contract|white badge|wb|csg|adecco|randstad)/.test(x)) return "TEMP";
   return "UNKNOWN";
 }
+
+// Shift classifier for VET/VTO
+function classifyShift(ts){
+  if (!ts) return null;
+  const m = String(ts).match(/T(\d{2}):(\d{2})/);
+  if (!m) return null;
+  const hh = +m[1], mm = +m[2];
+  const mins = hh*60 + mm;
+  // Day ≈ 07:00–18:59, Night ≈ 19:00–06:30
+  if (mins >= 7*60 && mins <= 18*60+59) return "Day";
+  if (mins >= 19*60 || mins <= 6*60+30) return "Night";
+  return null;
+}
+
 function parseCSVFile(file, opts={header:true, skipFirstLine:false}){
   return new Promise((resolve,reject)=>{
     const r=new FileReader();
@@ -186,35 +200,6 @@ function deriveCornersFromRoster(rows){
   }
   return [...set];
 }
-// ----- replace/ADD near other helpers -----
-function classifyShift(ts){
-  // returns "Day" | "Night" | null
-  if (!ts) return null;
-  const m = String(ts).match(/T(\d{2}):(\d{2})/);
-  if (!m) return null;
-  const hh = +m[1], mm = +m[2];
-  // Day ≈ 07:00–18:59, Night ≈ 19:00–06:30
-  const mins = hh*60 + mm;
-  if (mins >= 7*60 && mins <= 18*60+59) return "Day";
-  if (mins >= 19*60 || mins <= 6*60+30) return "Night";
-  return null;
-}
-
-// more permissive corner match (first 2 letters)
-const passesUIFilters = (row) => {
-  if (!row) return false;
-  if (cornerCodes.length){
-    const c = (row.corner || "").slice(0,2).toUpperCase();
-    const ok = cornerCodes.some(cc => c === cc.slice(0,2).toUpperCase());
-    if (!ok) return false;
-  }
-  if (newHireEl.checked && row.start instanceof Date){
-    const d0 = new Date(isoDate+"T00:00:00");
-    const days = Math.floor((d0 - row.start)/(1000*60*60*24));
-    if (days < 3) return false;
-  }
-  return true;
-};
 
 // ================== PROCESS ==================
 async function processAll(){
@@ -245,6 +230,22 @@ async function processAll(){
     }
     chipCorners.textContent = cornerCodes.join(" ");
     chipCornerSource.textContent = cornerSource==="derived" ? "(derived)" : "";
+
+    // ---- helper: apply the same UI filters that shaped roster ----
+    const passesUIFilters = (row) => {
+      if (!row) return false;
+      if (cornerCodes && cornerCodes.length){
+        const c = (row.corner || "").slice(0,2).toUpperCase();
+        const ok = cornerCodes.some(cc => c === cc.slice(0,2).toUpperCase());
+        if (!ok) return false;
+      }
+      if (newHireEl.checked && row.start instanceof Date){
+        const d0 = new Date(isoDate+"T00:00:00");
+        const days = Math.floor((d0 - row.start)/(1000*60*60*24));
+        if (days < 3) return false;
+      }
+      return true;
+    };
 
     // MyTime on-prem map
     const m0 = mytimeRaw[0] || {};
@@ -287,12 +288,12 @@ async function processAll(){
       return { id, deptId, area, typ, corner, met, start, onp };
     });
 
-    const fullById = new Map(rosterFullRows.map(x=>[x.id,x])); // <-- used by VET/VTO
+    const fullById = new Map(rosterFullRows.map(x=>[x.id,x])); // used by VET/VTO
 
     // Apply UI filters to get working roster slice for dashboard
     let roster = rosterFullRows.slice();
 
-    if (cornerCodes.length) roster = roster.filter(x=>cornerCodes.includes(x.corner));
+    if (cornerCodes.length) roster = roster.filter(x=>cornerCodes.some(cc => (x.corner||"").slice(0,2).toUpperCase() === cc.slice(0,2).toUpperCase()));
 
     if (newHireEl.checked){
       const d0 = new Date(isoDate+"T00:00:00");
@@ -344,79 +345,76 @@ async function processAll(){
       }
     }
 
-    // ====== VET/VTO CLASSIFICATION (fixed) ======
-// ====== replace your whole VET/VTO section with this ======
-let vetSet = new Set(), vtoSet = new Set();
+    // ====== VET/VTO CLASSIFICATION (day/night + robust corners) ======
+    let vetSet = new Set(), vtoSet = new Set();
 
-if (vetRaw && vetRaw.length) {
-  const a0 = vetRaw[0];
-  const A_CLASS = findKey(a0, ["_class","class"]);
-  const A_ID    = findKey(a0, ["employeeId","Employee ID","Person ID"]);
-  const A_TYP   = findKey(a0, ["opportunity.type","Opportunity Type","Type"]);
-  const A_ACC   = findKey(a0, ["opportunity.acceptedCount","Accepted Count"]);
-  const A_FLG   = findKey(a0, ["isAccepted"]);
-  const A_S1    = findKey(a0, ["opportunity.shiftStart","shiftStart"]);
-  const A_T1    = findKey(a0, ["acceptanceTime"]);
-  const A_OPID  = findKey(a0, ["opportunity.id","opportunityId","Opportunity Id"]);
+    if (vetRaw && vetRaw.length) {
+      const a0 = vetRaw[0];
+      const A_CLASS = findKey(a0, ["_class","class"]);
+      const A_ID    = findKey(a0, ["employeeId","Employee ID","Person ID"]);
+      const A_TYP   = findKey(a0, ["opportunity.type","Opportunity Type","Type"]);
+      const A_ACC   = findKey(a0, ["opportunity.acceptedCount","Accepted Count"]);
+      const A_FLG   = findKey(a0, ["isAccepted"]);
+      const A_S1    = findKey(a0, ["opportunity.shiftStart","shiftStart"]);
+      const A_T1    = findKey(a0, ["acceptanceTime"]);
+      const A_OPID  = findKey(a0, ["opportunity.id","opportunityId","Opportunity Id"]);
 
-  const dateFromTs = s => {
-    const str = String(s||"").trim();
-    const m = str.match(/^(\d{4}-\d{2}-\d{2})/);
-    return m ? m[1] : null;
-  };
-  const classifyType = raw => {
-    const t = String(raw||"").toLowerCase();
-    if (t.includes("vto") || t.includes("timeoff")) return "VTO";
-    if (t.includes("vet") || t.includes("overtime")) return "VET";
-    return null;
-  };
+      const dateFromTs = v => {
+        const s = String(v || "").trim();
+        const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
+        return m ? m[1] : null;
+      };
+      const classifyType = raw => {
+        const t = String(raw || "").toLowerCase();
+        if (t.includes("vto") || t.includes("timeoff")) return "VTO";
+        if (t.includes("vet") || t.includes("overtime")) return "VET";
+        return null;
+      };
 
-  const wantShift = shiftEl.value; // "Day" or "Night"
-  const firstLevel = new Set();
-  const perType = { VET:new Set(), VTO:new Set() };
+      const wantShift = shiftEl.value; // "Day" or "Night"
+      const firstLevel = new Set();
+      const perType = { VET:new Set(), VTO:new Set() };
 
-  for (const r of vetRaw) {
-    if (A_CLASS) {
-      const cls = String(r[A_CLASS]||"");
-      if (!/AcceptancePostingAcceptanceRecord/i.test(cls)) continue;
+      for (const r of vetRaw) {
+        if (A_CLASS) {
+          const cls = String(r[A_CLASS]||"");
+          if (!/AcceptancePostingAcceptanceRecord/i.test(cls)) continue;
+        }
+        const empId = normalizeId(r[A_ID]); if (!empId) continue;
+
+        const accCountOk = A_ACC ? Number(r[A_ACC]) > 0 : false;
+        const accFlagOk  = A_FLG ? String(r[A_FLG]).trim().toLowerCase() === "true" : false;
+        if (!(accCountOk || accFlagOk)) continue;
+
+        const dISO = dateFromTs(r[A_S1]) || dateFromTs(r[A_T1]);
+        if (dISO !== isoDate) continue;
+
+        const sType = classifyShift(r[A_S1]);
+        if (!sType || sType !== wantShift) continue;
+
+        const tClass = classifyType(r[A_TYP]); if (!tClass) continue;
+
+        const rosterEntry = fullById.get(empId);
+        if (!passesUIFilters(rosterEntry)) continue;
+
+        const oppId = A_OPID ? (r[A_OPID] || "") : "";
+        const k1 = `${empId}|${dISO}|${tClass}|${oppId}`;
+        if (firstLevel.has(k1)) continue;
+        firstLevel.add(k1);
+
+        const k2 = `${empId}|${dISO}|${tClass}`;
+        perType[tClass].add(k2);
+      }
+
+      // VTO wins over VET if both same AA same day
+      const pairsVTO = new Set([...perType.VTO].map(k => k.split("|").slice(0,2).join("|")));
+      const pairsVET = new Set([...perType.VET].map(k => k.split("|").slice(0,2).join("|")));
+      for (const p of pairsVTO) vtoSet.add(p.split("|")[0]);
+      for (const p of pairsVET) if (!pairsVTO.has(p)) vetSet.add(p.split("|")[0]);
+
+      console.log("✅ VET/VTO by shift:", wantShift, { vet: vetSet.size, vto: vtoSet.size });
     }
-    const empId = normalizeId(r[A_ID]); if (!empId) continue;
 
-    const accCountOk = A_ACC ? Number(r[A_ACC]) > 0 : false;
-    const accFlagOk  = A_FLG ? String(r[A_FLG]).trim().toLowerCase() === "true" : false;
-    if (!(accCountOk || accFlagOk)) continue;
-
-    const dISO = dateFromTs(r[A_S1]) || dateFromTs(r[A_T1]);
-    if (dISO !== isoDate) continue;
-
-    // shift filter
-    const sType = classifyShift(r[A_S1]);
-    if (!sType || sType !== wantShift) continue;
-
-    const tClass = classifyType(r[A_TYP]);
-    if (!tClass) continue;
-
-    // use full roster, then UI filters (corner/new hire)
-    const rosterEntry = fullById.get(empId);
-    if (!passesUIFilters(rosterEntry)) continue;
-
-    const oppId = A_OPID ? (r[A_OPID] || "") : "";
-    const k1 = `${empId}|${dISO}|${tClass}|${oppId}`;
-    if (firstLevel.has(k1)) continue;
-    firstLevel.add(k1);
-
-    const k2 = `${empId}|${dISO}|${tClass}`;
-    perType[tClass].add(k2);
-  }
-
-  // VTO wins over VET if both same AA same day
-  const pairsVTO = new Set([...perType.VTO].map(k => k.split("|").slice(0,2).join("|")));
-  const pairsVET = new Set([...perType.VET].map(k => k.split("|").slice(0,2).join("|")));
-  for (const p of pairsVTO) vtoSet.add(p.split("|")[0]);
-  for (const p of pairsVET) if (!pairsVTO.has(p)) vetSet.add(p.split("|")[0]);
-
-  console.log("✅ VET/VTO by shift:", wantShift, { vet: vetSet.size, vto: vtoSet.size });
-}
     // ====== Swaps ======
     const collectSwaps=(rows,mapping)=>{
       const out=[], inn=[];
@@ -431,9 +429,9 @@ if (vetRaw && vetRaw.length) {
         const id = normalizeId(r[S_ID]); if (!id) continue;
         const st = String(r[S_ST] ?? "Approved").toUpperCase();
         const ok = !S_ST || APPROVED.includes(st) || /APPROVED|COMPLETED|ACCEPTED/.test(st);
-        if (!ok) continue;
         const skipISO = toISODate(r[S_SKIP]);
         const workISO = toISODate(r[S_WORK]);
+        if (!ok) continue;
         if (skipISO===isoDate) out.push(id);
         if (workISO===isoDate) inn.push(id);
       }
@@ -527,7 +525,7 @@ if (vetRaw && vetRaw.length) {
     btnNoShow.onclick = ()=> downloadCSV(`no_shows_${isoDate}.csv`, noShows.length?noShows:[{id:"",dept_bucket:"",emp_type:"",corner:"",date:isoDate,reason:"No-Show"}]);
 
     // ================= AUDIT TABLE =================
-    // Priority tagging: Vacation > BH > VTO > Swap-Out > VET-not-shown > No-Show
+    // Priority: Vacation > BH > VTO > Swap-Out > VET-not-shown > No-Show
     const reasonOf = new Map(); // id -> reason
     const tag = (ids, reason)=>{ for (const id of ids){ if (byId.has(id) && !reasonOf.has(id)) reasonOf.set(id, reason); } };
 
@@ -536,16 +534,13 @@ if (vetRaw && vetRaw.length) {
     tag(vtoSet, "VTO accepted");
     tag(swapOutSet, "Swap-Out");
 
-    // VET-not-shown: accepted VET but not on-prem
     for (const x of vetExpectedRows){
       if (onPrem.get(x.id)!==true && !reasonOf.has(x.id)) reasonOf.set(x.id, "VET accepted but not shown");
     }
-    // No-Show: scheduled after exclusions but not present and not already tagged
     for (const x of cohortExpected){
       if (x.onp!==true && !reasonOf.has(x.id)) reasonOf.set(x.id, "No-Show (plain)");
     }
 
-    // Build audit counts
     const auditReasons = [
       "Vacation / PTO",
       "Banked Holiday",
