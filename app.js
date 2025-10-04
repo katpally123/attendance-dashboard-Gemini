@@ -308,7 +308,7 @@ async function processAll(){
     }
 
     // ====== PostingAcceptance: VET/VTO (SOP: Status -> AcceptedCount=1 -> Date) ======
-// ====== PostingAcceptance: VET/VTO (Roster-only mapping; no workgroup fallback) ======
+// ====== PostingAcceptance: VET/VTO (Roster-only; no bucket requirement) ======
 const vetSet = new Set(), vtoSet = new Set();
 
 if (vetRaw && vetRaw.length) {
@@ -323,36 +323,20 @@ if (vetRaw && vetRaw.length) {
   const A_T1  = findKey(a0, ["acceptanceTime"]);
   const A_T2  = findKey(a0, ["opportunityCreatedAt","opportunity.createdAt"]);
 
-  // normalize to match roster keys
   const strictNormalize = s => {
     const raw = String(s||"").trim();
     const digits = raw.replace(/\D/g,"");
     return digits ? digits.replace(/^0+/, "") : raw.toLowerCase();
   };
 
-  // map roster deptId/area -> dashboard bucket
-  const bucketFromRoster = (rEntry) => {
-    if (!rEntry || !SETTINGS || !SETTINGS.departments) return null;
-    const deptId = rEntry.deptId;
-    const area   = rEntry.area;
-    const cfg = SETTINGS.departments;
-    if (cfg.Inbound?.dept_ids?.includes(deptId) && !(cfg.DA?.dept_ids?.includes(deptId))) return "Inbound";
-    if (cfg.DA?.dept_ids?.includes(deptId)) return "DA";
-    if (cfg.ICQA?.dept_ids?.includes(deptId) && String(area) === String(cfg.ICQA.management_area_id)) return "ICQA";
-    if (cfg.CRETs?.dept_ids?.includes(deptId) && String(area) === String(cfg.CRETs.management_area_id)) return "CRETs";
-    return null;
-  };
-
-  // classify PostingAcceptance type -> VET / VTO
   const classifyType = (raw) => {
     const t = String(raw||"").toLowerCase();
-    if (/vto|voluntary\s*time\s*off|time\s*off|voluntarytimeoff/.test(t)) return "VTO";
-    if (/vet|voluntary\s*over\s*time|voluntary\s*overtime|voluntaryovertime|overtime/.test(t)) return "VET";
+    if (t.includes("vto") || /voluntary\s*time\s*off|time\s*off|voluntarytimeoff/.test(t)) return "VTO";
+    if (t.includes("vet") || /voluntary\s*overtime|voluntaryovertime|overtime/.test(t)) return "VET";
     return null;
   };
 
-  // dedupe key: id|date|type|bucket
-  const seen = new Set();
+  const seen = new Set(); // id|date|type
 
   for (const r of vetRaw) {
     const idRaw  = r[A_ID];
@@ -368,24 +352,19 @@ if (vetRaw && vetRaw.length) {
     const dISO = toISODate(r[A_S1]) || toISODate(r[A_S2]) || toISODate(r[A_T1]) || toISODate(r[A_T2]);
     if (dISO !== isoDate) continue;
 
-    // roster lookup ONLY
+    // MUST be in roster; if not found, skip (no workgroup fallback)
     const rosterEntry = byId.get(idNorm) || byId.get(normalizeId(idRaw));
-    if (!rosterEntry) continue; // no roster → do not count at all
-
-    const bucket = bucketFromRoster(rosterEntry);
-    if (!bucket) continue; // dept not mappable → skip
+    if (!rosterEntry) continue;
 
     const tClass = classifyType(r[A_TYP]);
     if (!tClass) continue;
 
-    const key = `${idNorm}|${dISO}|${tClass}|${bucket}`;
+    const key = `${idNorm}|${dISO}|${tClass}`;
     if (seen.has(key)) continue;
     seen.add(key);
 
-    // store as id@@bucket for bucket-aware handling downstream
-    const entry = `${idNorm}@@${bucket}`;
-    if (tClass === "VET") vetSet.add(entry);
-    else vtoSet.add(entry);
+    if (tClass === "VET") vetSet.add(idNorm);
+    else vtoSet.add(idNorm);
   }
 }
     // ====== Swaps ======
