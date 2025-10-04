@@ -308,51 +308,85 @@ async function processAll(){
     }
 
     // ====== PostingAcceptance: VET/VTO (SOP: Status -> AcceptedCount=1 -> Date) ======
-// ====== PostingAcceptance: VET/VTO (SOP-aligned, First-Dept Workgroup Rule) ======
+// ====== PostingAcceptance: VET/VTO (Roster-only mapping; no workgroup fallback) ======
 const vetSet = new Set(), vtoSet = new Set();
-if (vetRaw.length) {
-    const a0 = vetRaw[0];
-    const A_ID   = findKey(a0, ["employeeId", "Employee ID"]);
-    const A_TYP  = findKey(a0, ["opportunity.type", "Opportunity Type","Type"]);
-    const A_ACC  = findKey(a0, ["opportunity.acceptedCount","Accepted Count"]);
-    const A_FLAG = findKey(a0, ["isAccepted"]);
-    const A_S1   = findKey(a0, ["opportunity.shiftStart","shiftStart"]);
-    const A_S2   = findKey(a0, ["opportunity.shiftEnd","shiftEnd"]);
-    const A_T1   = findKey(a0, ["acceptanceTime"]);
-    const A_T2   = findKey(a0, ["opportunityCreatedAt"]);
-    const A_WG   = findKey(a0, ["workgroups","Workgroups"]);
 
-    for (const r of vetRaw) {
-        const id = normalizeId(r[A_ID]);
-        if (!id) continue;
+if (vetRaw && vetRaw.length) {
+  const a0   = vetRaw[0];
 
-        // accepted if acceptedCount==1 OR isAccepted==true
-        const accCountOk = A_ACC ? (String(r[A_ACC]).trim() === "1" || r[A_ACC] === 1) : false;
-        const accFlagOk  = A_FLAG ? String(r[A_FLAG]).trim().toLowerCase() === "true" : false;
-        if (!(accCountOk || accFlagOk)) continue;
+  const A_ID  = findKey(a0, ["employeeId","Employee ID"]);
+  const A_TYP = findKey(a0, ["opportunity.type","Opportunity Type","Type"]);
+  const A_ACC = findKey(a0, ["opportunity.acceptedCount","Accepted Count"]);
+  const A_FLG = findKey(a0, ["isAccepted"]);
+  const A_S1  = findKey(a0, ["opportunity.shiftStart","shiftStart"]);
+  const A_S2  = findKey(a0, ["opportunity.shiftEnd","shiftEnd"]);
+  const A_T1  = findKey(a0, ["acceptanceTime"]);
+  const A_T2  = findKey(a0, ["opportunityCreatedAt","opportunity.createdAt"]);
 
-        // workgroup → bucket (first token wins)
-        let bucket = "";
-        if (A_WG && r[A_WG]) {
-            const wg = String(r[A_WG]).split(/[\/,|]/)[0].trim().toLowerCase();
-            if (wg.includes("inbound")) bucket = "Inbound";
-            else if (wg.includes("da") || wg.includes("delivery")) bucket = "DA";
-            else if (wg.includes("ic") || wg.includes("qa") || wg.includes("icqa")) bucket = "ICQA";
-            else if (wg.includes("cret") || wg.includes("return")) bucket = "CRETs";
-            else if (wg.includes("admin") || wg.includes("hr") || wg.includes("it")) continue; // ignore admin
-        }
+  // normalize to match roster keys
+  const strictNormalize = s => {
+    const raw = String(s||"").trim();
+    const digits = raw.replace(/\D/g,"");
+    return digits ? digits.replace(/^0+/, "") : raw.toLowerCase();
+  };
 
-        // fallback if bucket not resolved
-        if (!bucket) continue;
+  // map roster deptId/area -> dashboard bucket
+  const bucketFromRoster = (rEntry) => {
+    if (!rEntry || !SETTINGS || !SETTINGS.departments) return null;
+    const deptId = rEntry.deptId;
+    const area   = rEntry.area;
+    const cfg = SETTINGS.departments;
+    if (cfg.Inbound?.dept_ids?.includes(deptId) && !(cfg.DA?.dept_ids?.includes(deptId))) return "Inbound";
+    if (cfg.DA?.dept_ids?.includes(deptId)) return "DA";
+    if (cfg.ICQA?.dept_ids?.includes(deptId) && String(area) === String(cfg.ICQA.management_area_id)) return "ICQA";
+    if (cfg.CRETs?.dept_ids?.includes(deptId) && String(area) === String(cfg.CRETs.management_area_id)) return "CRETs";
+    return null;
+  };
 
-        // assign to correct set
-        const type = (r[A_TYP] || "").toLowerCase();
-        if (type.includes("overtime") || type.includes("vet")) {
-            vetSet.add(id + "|" + bucket);
-        } else if (type.includes("timeoff") || type.includes("vto")) {
-            vtoSet.add(id + "|" + bucket);
-        }
-    }
+  // classify PostingAcceptance type -> VET / VTO
+  const classifyType = (raw) => {
+    const t = String(raw||"").toLowerCase();
+    if (/vto|voluntary\s*time\s*off|time\s*off|voluntarytimeoff/.test(t)) return "VTO";
+    if (/vet|voluntary\s*over\s*time|voluntary\s*overtime|voluntaryovertime|overtime/.test(t)) return "VET";
+    return null;
+  };
+
+  // dedupe key: id|date|type|bucket
+  const seen = new Set();
+
+  for (const r of vetRaw) {
+    const idRaw  = r[A_ID];
+    const idNorm = strictNormalize(idRaw);
+    if (!idNorm || idNorm === "na") continue;
+
+    // accepted? (acceptedCount==1 OR isAccepted==true)
+    const accCountOk = A_ACC ? (String(r[A_ACC]).trim() === "1" || r[A_ACC] === 1) : false;
+    const accFlagOk  = A_FLG ? (String(r[A_FLG]).trim().toLowerCase() === "true") : false;
+    if (!(accCountOk || accFlagOk)) continue;
+
+    // date: shiftStart -> shiftEnd -> acceptanceTime -> createdAt
+    const dISO = toISODate(r[A_S1]) || toISODate(r[A_S2]) || toISODate(r[A_T1]) || toISODate(r[A_T2]);
+    if (dISO !== isoDate) continue;
+
+    // roster lookup ONLY
+    const rosterEntry = byId.get(idNorm) || byId.get(normalizeId(idRaw));
+    if (!rosterEntry) continue; // no roster → do not count at all
+
+    const bucket = bucketFromRoster(rosterEntry);
+    if (!bucket) continue; // dept not mappable → skip
+
+    const tClass = classifyType(r[A_TYP]);
+    if (!tClass) continue;
+
+    const key = `${idNorm}|${dISO}|${tClass}|${bucket}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    // store as id@@bucket for bucket-aware handling downstream
+    const entry = `${idNorm}@@${bucket}`;
+    if (tClass === "VET") vetSet.add(entry);
+    else vtoSet.add(entry);
+  }
 }
     // ====== Swaps ======
     const collectSwaps=(rows,mapping)=>{
