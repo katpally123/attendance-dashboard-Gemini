@@ -308,7 +308,17 @@ async function processAll(){
     }
 
     // ====== PostingAcceptance: VET/VTO (SOP: Status -> AcceptedCount=1 -> Date) ======
-// ====== PostingAcceptance: VET/VTO (EmployeeID-based, VTO-wins) ======
+// ====== PostingAcceptance: VET/VTO (EmployeeID-based, float-safe, VTO-wins) ======
+
+// --- Universal ID normalization (handles float/int/string) ---
+const normalizeId = v => {
+  if (v == null) return "";
+  const s = String(v).trim();
+  // Handles cases like 205514534.0 → 205514534
+  const clean = s.replace(/\.0$/, "").replace(/\D/g, "");
+  return clean.replace(/^0+/, ""); // remove leading zeros
+};
+
 const vetSet = new Set(); // employee IDs with VET for isoDate
 const vtoSet = new Set(); // employee IDs with VTO for isoDate
 
@@ -327,12 +337,12 @@ if (vetRaw && vetRaw.length) {
   const A_T2    = findKey(a0, ["opportunityCreatedAt", "opportunity.createdAt"]);
   const A_OPID  = findKey(a0, ["opportunity.id", "opportunityId", "Opportunity Id"]);
 
-  // --- Helpers ---
   const dateFromTs = v => {
     const s = String(v || "").trim();
     const m = s.match(/^(\d{4}-\d{2}-\d{2})[T\s]/);
     return m ? m[1] : (s.match(/^(\d{4}-\d{2}-\d{2})$/)?.[1] || null);
   };
+
   const classifyType = raw => {
     const t = String(raw || "").toLowerCase();
     if (t.includes("vto") || t.includes("timeoff")) return "VTO";
@@ -356,7 +366,7 @@ if (vetRaw && vetRaw.length) {
       if (!/AcceptancePostingAcceptanceRecord/i.test(cls)) continue;
     }
 
-    // 2) Normalize Employee ID
+    // 2) Normalize Employee ID (handles 205514534.0 → 205514534)
     const empId = normalizeId(r[A_ID]);
     if (!empId) continue;
 
@@ -399,7 +409,7 @@ if (vetRaw && vetRaw.length) {
   for (const p of pairsVTO) vtoSet.add(p.split("|")[0]);
   for (const p of pairsVET) if (!pairsVTO.has(p)) vetSet.add(p.split("|")[0]);
 
-  console.log("VET/VTO EmployeeID-based summary:", {
+  console.log("✅ VET/VTO EmployeeID-based summary:", {
     seenRows, acceptedPass, datePass, typePass, rosterPass,
     vetCount: vetSet.size, vtoCount: vtoSet.size
   });
