@@ -97,7 +97,6 @@ function updateRibbonStatic(){
 // ================== HELPERS ==================
 const canon = s => String(s||"").trim().toLowerCase().replace(/\s+/g," ");
 
-// ---- Universal ID Normalizer (hoisted) ----
 function normalizeId(v) {
   if (v == null) return "";
   const s = String(v).trim();
@@ -195,7 +194,7 @@ async function processAll(){
     if (!rosterEl.files[0] || !mytimeEl.files[0]) throw new Error("Upload Roster and MyTime CSVs.");
 
     // read all files
-    const [rosterRaw, mytimeRaw, vacRaw, swapOutRaw, swapInRaw, vetRaw] = await Promise.all([
+    const [rosterRawCSV, mytimeRaw, vacRaw, swapOutRaw, swapInRaw, vetRaw] = await Promise.all([
       parseCSVFile(rosterEl.files[0], {header:true}),
       parseCSVFile(mytimeEl.files[0], {header:true, skipFirstLine:true}),
       vacEl.files[0]     ? parseCSVFile(vacEl.files[0], {header:true})     : Promise.resolve([]),
@@ -212,7 +211,7 @@ async function processAll(){
     let cornerCodes = SETTINGS.shift_schedule?.[shiftEl.value]?.[dayName] || [];
     let cornerSource = "settings";
     if (!cornerCodes.length){
-      cornerCodes = deriveCornersFromRoster(rosterRaw);
+      cornerCodes = deriveCornersFromRoster(rosterRawCSV);
       cornerSource = "derived";
     }
     chipCorners.textContent = cornerCodes.join(" ");
@@ -231,8 +230,8 @@ async function processAll(){
       onPrem.set(id, (onPrem.get(id)||false) || val);
     }
 
-    // Roster enrich
-    const r0 = rosterRaw[0] || {};
+    // Roster enrich (build full roster first)
+    const r0 = rosterRawCSV[0] || {};
     const R_ID   = findKey(r0, ["Employee ID","Person Number","Person ID","Badge ID","ID"]);
     const R_DEPT = findKey(r0, ["Department ID","Home Department ID","Dept ID"]);
     const R_AREA = findKey(r0, ["Management Area ID","Mgmt Area ID","Area ID","Area"]);
@@ -245,7 +244,8 @@ async function processAll(){
     const first2 = s=> (s||"").slice(0,2);
     const firstAndThird = s => (s?.length>=3 ? s[0]+s[2] : "");
 
-    let roster = rosterRaw.map(r=>{
+    // full roster rows (no UI filtering)
+    const rosterFullRows = rosterRawCSV.map(r=>{
       const id = normalizeId(r[R_ID]);
       const deptId = String(r[R_DEPT]??"").trim();
       const area = String((R_AREA? r[R_AREA] : "")??"").trim();
@@ -257,12 +257,14 @@ async function processAll(){
       const onp = onPrem.get(id)===true;
       return { id, deptId, area, typ, corner, met, start, onp };
     });
-    const fullById = new Map(roster.map(x=>[x.id,x]));
 
-    // filter by corners
+    const fullById = new Map(rosterFullRows.map(x=>[x.id,x])); // <-- used by VET/VTO
+
+    // Apply UI filters to get working roster slice for dashboard
+    let roster = rosterFullRows.slice();
+
     if (cornerCodes.length) roster = roster.filter(x=>cornerCodes.includes(x.corner));
 
-    // exclude new hires
     if (newHireEl.checked){
       const d0 = new Date(isoDate+"T00:00:00");
       roster = roster.filter(x=>{
@@ -271,6 +273,8 @@ async function processAll(){
         return days>=3;
       });
     }
+
+    const byId = new Map(roster.map(x=>[x.id,x])); // filtered
 
     // dept helpers
     const cfg = SETTINGS.departments;
@@ -292,11 +296,9 @@ async function processAll(){
     };
     const sumTotals = ACC => depts.reduce((s,d)=>s+ACC[d].TOTAL,0);
 
-    const byId = new Map(roster.map(x=>[x.id,x]));
-
     // ====== Hours Summary: Vacation (>=10h) & Banked Holiday (>=12h) ======
-    const vacSet = new Set();       // Vacation/PTO
-    const bhSet  = new Set();       // Banked Holiday
+    const vacSet = new Set();
+    const bhSet  = new Set();
     if (vacRaw.length){
       const v0 = vacRaw[0];
       const V_ID = findKey(v0, ["Employee ID","Person ID","Person Number","Badge ID","ID"]);
@@ -313,9 +315,20 @@ async function processAll(){
       }
     }
 
-    // ====== PostingAcceptance: VET/VTO (float-safe, VTO-wins, roster-only) ======
-    let vetSet = new Set();
-    let vtoSet = new Set();
+    // ====== VET/VTO CLASSIFICATION (fixed) ======
+    let vetSet = new Set(), vtoSet = new Set();
+
+    // helper: apply the same UI filters that shaped `roster`
+    const passesUIFilters = (row) => {
+      if (!row) return false;
+      if (cornerCodes.length && !cornerCodes.includes(row.corner)) return false;
+      if (newHireEl.checked && row.start instanceof Date) {
+        const d0 = new Date(isoDate+"T00:00:00");
+        const days = Math.floor((d0 - row.start) / (1000*60*60*24));
+        if (days < 3) return false;
+      }
+      return true;
+    };
 
     if (vetRaw && vetRaw.length) {
       const a0 = vetRaw[0];
@@ -348,9 +361,7 @@ async function processAll(){
           const cls = String(r[A_CLASS] || "");
           if (!/AcceptancePostingAcceptanceRecord/i.test(cls)) continue;
         }
-
-        const empId = normalizeId(r[A_ID]);
-        if (!empId) continue;
+        const empId = normalizeId(r[A_ID]); if (!empId) continue;
 
         const accCountOk = A_ACC ? Number(r[A_ACC]) > 0 : false;
         const accFlagOk  = A_FLG ? String(r[A_FLG]).trim().toLowerCase() === "true" : false;
@@ -362,8 +373,9 @@ async function processAll(){
         const tClass = classifyType(r[A_TYP]);
         if (!tClass) continue;
 
-        const rosterEntry = byId.get(empId);
-        if (!rosterEntry) continue;
+        // Use full roster (not filtered) then apply UI filters so classification works in ALL corners
+        const rosterEntry = fullById.get(empId);
+        if (!passesUIFilters(rosterEntry)) continue;
 
         const oppId = A_OPID ? (r[A_OPID] || "") : "";
         const k1 = `${empId}|${dISO}|${tClass}|${oppId}`;
@@ -374,15 +386,14 @@ async function processAll(){
         perType[tClass].add(k2);
       }
 
+      // If AA accepted both VTO and VET same day, VTO wins
       const pairsVTO = new Set([...perType.VTO].map(k => k.split("|").slice(0,2).join("|")));
       const pairsVET = new Set([...perType.VET].map(k => k.split("|").slice(0,2).join("|")));
 
       for (const p of pairsVTO) vtoSet.add(p.split("|")[0]);
       for (const p of pairsVET) if (!pairsVTO.has(p)) vetSet.add(p.split("|")[0]);
 
-      console.log("✅ VET/VTO Summary:", {
-        vetCount: vetSet.size, vtoCount: vtoSet.size
-      });
+      console.log("✅ VET/VTO Summary:", { vetCount: vetSet.size, vtoCount: vtoSet.size });
     }
 
     // ====== Swaps ======
@@ -414,12 +425,11 @@ async function processAll(){
     const swapInSet  = new Set([...S1.inn, ...S2.inn]);
 
     // ====== Build cohorts ======
-    // Normalize vet/vto sets before joins
     const normalizeSet = s => new Set([...s].map(id => normalizeId(id)));
     vetSet = normalizeSet(vetSet);
     vtoSet = normalizeSet(vtoSet);
 
-    // Exclusions from "expected": Vacation, Banked Holiday, VTO, Swap-Out (priority Vacation > BH > VTO > Swap-Out)
+    // Exclusions from "expected": Vacation > BH > VTO > Swap-Out
     const excluded = new Set();
     for (const id of vacSet) if (byId.has(id)) excluded.add(id);
     for (const id of bhSet)  if (byId.has(id) && !excluded.has(id)) excluded.add(id);
@@ -431,10 +441,10 @@ async function processAll(){
 
     // rows for display
     const swapOutRows        = [...swapOutSet].map(id=>byId.get(id)).filter(Boolean);
-    const swapInExpectedRows = [...swapInSet].map(id=>fullById.get(id)).filter(Boolean);
+    const swapInExpectedRows = [...swapInSet].map(id=>fullById.get(id)).filter(Boolean).filter(passesUIFilters);
     const swapInPresentRows  = swapInExpectedRows.filter(x=>onPrem.get(x.id)===true);
 
-    const vetExpectedRows = [...vetSet].map(id=>byId.get(id)||fullById.get(id)).filter(Boolean);
+    const vetExpectedRows = [...vetSet].map(id=>fullById.get(id)).filter(Boolean).filter(passesUIFilters);
     const vetPresentRows  = vetExpectedRows.filter(x=>onPrem.get(x.id)===true);
 
     // ---------- Dashboard table ----------
@@ -471,7 +481,7 @@ async function processAll(){
       + rowHTML("VET Present", row_VETPresent)
       + "</tbody>";
 
-    // ---------- Ribbon chips for Vacation / BH with CSV links ----------
+    // ---------- Ribbon chips ----------
     const vacRows = [...vacSet].map(id=>byId.get(id)||fullById.get(id)).filter(Boolean).map(x=>({
       id:x.id, dept_bucket:bucketOf(x), emp_type:x.typ, corner:x.corner, date:isoDate, reason:"Vacation"
     }));
@@ -546,7 +556,7 @@ async function processAll(){
     }).join("");
     auditTable.innerHTML = auditHeader + "<tbody>" + auditBody + "</tbody>";
 
-    // Audit CSV = row-level details (one line per associate with reason)
+    // Audit CSV (row-level)
     const auditRows = [];
     for (const [id, reason] of reasonOf.entries()){
       const x = byId.get(id) || fullById.get(id); if (!x) continue;
