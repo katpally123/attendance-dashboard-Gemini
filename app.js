@@ -308,27 +308,15 @@ async function processAll(){
     }
 
     // ====== PostingAcceptance: VET/VTO (SOP: Status -> AcceptedCount=1 -> Date) ======
-// ====== PostingAcceptance: VET/VTO (Login→Roster→MyTime Mapping, VTO-wins) ======
+// ====== PostingAcceptance: VET/VTO (EmployeeID-based, VTO-wins) ======
 const vetSet = new Set(); // employee IDs with VET for isoDate
 const vtoSet = new Set(); // employee IDs with VTO for isoDate
 
-// --- Build login↔ID maps from roster ---
-const loginToId = new Map();
-const idToLogin = new Map();
-for (const r of rosterRaw) {
-  const id = normalizeId(r["Employee ID"] || r["Person ID"] || r["Badge ID"]);
-  const login = String(r["User ID"] || r["Login"] || "").trim().toLowerCase();
-  if (id && login) {
-    loginToId.set(login, id);
-    idToLogin.set(id, login);
-  }
-}
-
-// --- Parse VET/VTO file (PostingAcceptance) ---
 if (vetRaw && vetRaw.length) {
   const a0 = vetRaw[0];
+
+  // --- Column detection ---
   const A_CLASS = findKey(a0, ["_class", "class"]);
-  const A_LOGIN = findKey(a0, ["employeeLogin", "UserLogin", "Login"]);
   const A_ID    = findKey(a0, ["employeeId", "Employee ID", "Person ID"]);
   const A_TYP   = findKey(a0, ["opportunity.type", "Opportunity Type", "Type"]);
   const A_ACC   = findKey(a0, ["opportunity.acceptedCount", "Accepted Count"]);
@@ -339,12 +327,12 @@ if (vetRaw && vetRaw.length) {
   const A_T2    = findKey(a0, ["opportunityCreatedAt", "opportunity.createdAt"]);
   const A_OPID  = findKey(a0, ["opportunity.id", "opportunityId", "Opportunity Id"]);
 
+  // --- Helpers ---
   const dateFromTs = v => {
     const s = String(v || "").trim();
     const m = s.match(/^(\d{4}-\d{2}-\d{2})[T\s]/);
     return m ? m[1] : (s.match(/^(\d{4}-\d{2}-\d{2})$/)?.[1] || null);
   };
-
   const classifyType = raw => {
     const t = String(raw || "").toLowerCase();
     if (t.includes("vto") || t.includes("timeoff")) return "VTO";
@@ -352,53 +340,49 @@ if (vetRaw && vetRaw.length) {
     return null;
   };
 
-  // Diagnostics counters
-  let seenRows = 0, acceptedPass = 0, datePass = 0, typePass = 0, mappedLogin = 0, rosterPass = 0;
+  // --- Diagnostics counters ---
+  let seenRows = 0, acceptedPass = 0, datePass = 0, typePass = 0, rosterPass = 0;
 
   const firstLevel = new Set();  // id|date|type|oppId
   const perType = { VET: new Set(), VTO: new Set() };
 
+  // --- Parse rows ---
   for (const r of vetRaw) {
     seenRows++;
 
-    // Must be Acceptance record
+    // 1) Only acceptance records if class column exists
     if (A_CLASS) {
       const cls = String(r[A_CLASS] || "");
       if (!/AcceptancePostingAcceptanceRecord/i.test(cls)) continue;
     }
 
-    // --- Identify Employee ---
-    let empId = normalizeId(r[A_ID]);
-    const login = String(r[A_LOGIN] || "").trim().toLowerCase();
-    if (!empId && login && loginToId.has(login)) {
-      empId = loginToId.get(login);
-      mappedLogin++;
-    }
-    if (!empId) continue; // skip unmapped
+    // 2) Normalize Employee ID
+    const empId = normalizeId(r[A_ID]);
+    if (!empId) continue;
 
-    // --- Accepted check ---
+    // 3) Accepted?
     const accCountOk = A_ACC ? Number(r[A_ACC]) > 0 : false;
     const accFlagOk  = A_FLG ? String(r[A_FLG]).trim().toLowerCase() === "true" : false;
     if (!(accCountOk || accFlagOk)) continue;
     acceptedPass++;
 
-    // --- Date check ---
+    // 4) Date check
     const dISO = dateFromTs(r[A_S1]) || dateFromTs(r[A_S2]) ||
                  dateFromTs(r[A_T1]) || dateFromTs(r[A_T2]);
     if (dISO !== isoDate) continue;
     datePass++;
 
-    // --- Type check ---
+    // 5) Type classification
     const tClass = classifyType(r[A_TYP]);
     if (!tClass) continue;
     typePass++;
 
-    // --- Roster check (department verification) ---
+    // 6) Must exist in roster (for department mapping)
     const rosterEntry = byId.get(empId);
     if (!rosterEntry) continue;
     rosterPass++;
 
-    // --- Dedupe ---
+    // 7) Deduplicate (first by oppId, then id/date/type)
     const oppId = A_OPID ? (r[A_OPID] || "") : "";
     const k1 = `${empId}|${dISO}|${tClass}|${oppId}`;
     if (firstLevel.has(k1)) continue;
@@ -408,16 +392,15 @@ if (vetRaw && vetRaw.length) {
     perType[tClass].add(k2);
   }
 
-  // --- Collapse and apply VTO precedence ---
+  // --- Collapse and enforce VTO precedence ---
   const pairsVTO = new Set([...perType.VTO].map(k => k.split("|").slice(0, 2).join("|")));
   const pairsVET = new Set([...perType.VET].map(k => k.split("|").slice(0, 2).join("|")));
 
   for (const p of pairsVTO) vtoSet.add(p.split("|")[0]);
   for (const p of pairsVET) if (!pairsVTO.has(p)) vetSet.add(p.split("|")[0]);
 
-  console.log("VET/VTO Mapping Summary:", {
-    seenRows, acceptedPass, datePass, typePass,
-    mappedLogin, rosterPass,
+  console.log("VET/VTO EmployeeID-based summary:", {
+    seenRows, acceptedPass, datePass, typePass, rosterPass,
     vetCount: vetSet.size, vtoCount: vtoSet.size
   });
 }
