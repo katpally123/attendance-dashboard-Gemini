@@ -308,14 +308,20 @@ async function processAll(){
     }
 
     // ====== PostingAcceptance: VET/VTO (SOP: Status -> AcceptedCount=1 -> Date) ======
-// ====== PostingAcceptance: VET/VTO (EmployeeID-based, float-safe, VTO-wins) ======
+// ====== PostingAcceptance: VET/VTO (Self-contained, float-safe, VTO-wins) ======
 const vetSet = new Set(); // employee IDs with VET for isoDate
 const vtoSet = new Set(); // employee IDs with VTO for isoDate
 
+// --- Local normalizer (independent of global scope) ---
+function vetNormalizeId(v) {
+  if (v == null) return "";
+  const s = String(v).trim();
+  const clean = s.replace(/\.0$/, "").replace(/\D/g, "");
+  return clean.replace(/^0+/, "");
+}
+
 if (vetRaw && vetRaw.length) {
   const a0 = vetRaw[0];
-
-  // --- Column detection ---
   const A_CLASS = findKey(a0, ["_class","class"]);
   const A_ID    = findKey(a0, ["employeeId","Employee ID","Person ID"]);
   const A_TYP   = findKey(a0, ["opportunity.type","Opportunity Type","Type"]);
@@ -339,20 +345,18 @@ if (vetRaw && vetRaw.length) {
     return null;
   };
 
-  // --- Counters and dedupe sets ---
-  const firstLevel = new Set();
-  const perType = { VET:new Set(), VTO:new Set() };
   let seenRows=0,acceptedPass=0,datePass=0,typePass=0,rosterPass=0;
+  const firstLevel=new Set();
+  const perType={VET:new Set(),VTO:new Set()};
 
   for (const r of vetRaw) {
     seenRows++;
     if (A_CLASS) {
-      const cls = String(r[A_CLASS]||"");
+      const cls=String(r[A_CLASS]||"");
       if (!/AcceptancePostingAcceptanceRecord/i.test(cls)) continue;
     }
 
-    // uses already-declared normalizeId safely (no redeclaration)
-    const empId = normalizeId(r[A_ID]);
+    const empId = vetNormalizeId(r[A_ID]);
     if (!empId) continue;
 
     const accCountOk = A_ACC ? Number(r[A_ACC]) > 0 : false;
