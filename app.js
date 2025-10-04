@@ -96,10 +96,13 @@ function updateRibbonStatic(){
 
 // ================== HELPERS ==================
 const canon = s => String(s||"").trim().toLowerCase().replace(/\s+/g," ");
-const normalizeId = v => {
-  const t = String(v??"").trim(); const d=t.replace(/\D/g,""); const noLead=d.replace(/^0+/,"");
-  return noLead || t;
-};
+// --- Universal Normalizer (safe for float/int/string IDs) ---
+function normalizeId(v) {
+  if (v == null) return "";
+  const s = String(v).trim();
+  const clean = s.replace(/\.0$/, "").replace(/\D/g, "");
+  return clean.replace(/^0+/, ""); // remove leading zeros
+}
 const presentVal = (val, markers) => markers.includes(String(val||"").trim().toUpperCase());
 const parseDateLoose = s => { const d=new Date(s); return isNaN(d)?null:d; };
 
@@ -308,17 +311,9 @@ async function processAll(){
     }
 
     // ====== PostingAcceptance: VET/VTO (SOP: Status -> AcceptedCount=1 -> Date) ======
-// ====== PostingAcceptance: VET/VTO (Self-contained, float-safe, VTO-wins) ======
-const vetSet = new Set(); // employee IDs with VET for isoDate
-const vtoSet = new Set(); // employee IDs with VTO for isoDate
-
-// --- Local normalizer (independent of global scope) ---
-function vetNormalizeId(v) {
-  if (v == null) return "";
-  const s = String(v).trim();
-  const clean = s.replace(/\.0$/, "").replace(/\D/g, "");
-  return clean.replace(/^0+/, "");
-}
+// ====== PostingAcceptance: VET/VTO (float-safe, VTO-wins, roster-only) ======
+const vetSet = new Set();
+const vtoSet = new Set();
 
 if (vetRaw && vetRaw.length) {
   const a0 = vetRaw[0];
@@ -334,50 +329,58 @@ if (vetRaw && vetRaw.length) {
   const A_OPID  = findKey(a0, ["opportunity.id","opportunityId","Opportunity Id"]);
 
   const dateFromTs = v => {
-    const s = String(v||"").trim();
+    const s = String(v || "").trim();
     const m = s.match(/^(\d{4}-\d{2}-\d{2})[T\s]/);
     return m ? m[1] : (s.match(/^(\d{4}-\d{2}-\d{2})$/)?.[1] || null);
   };
+
   const classifyType = raw => {
-    const t = String(raw||"").toLowerCase();
+    const t = String(raw || "").toLowerCase();
     if (t.includes("vto") || t.includes("timeoff")) return "VTO";
     if (t.includes("vet") || t.includes("overtime")) return "VET";
     return null;
   };
 
-  let seenRows=0,acceptedPass=0,datePass=0,typePass=0,rosterPass=0;
-  const firstLevel=new Set();
-  const perType={VET:new Set(),VTO:new Set()};
+  let seenRows = 0, acceptedPass = 0, datePass = 0, typePass = 0, rosterPass = 0;
+  const firstLevel = new Set();
+  const perType = { VET: new Set(), VTO: new Set() };
 
   for (const r of vetRaw) {
     seenRows++;
+
+    // 1. Only process Acceptance records
     if (A_CLASS) {
-      const cls=String(r[A_CLASS]||"");
+      const cls = String(r[A_CLASS] || "");
       if (!/AcceptancePostingAcceptanceRecord/i.test(cls)) continue;
     }
 
-    const empId = vetNormalizeId(r[A_ID]);
+    // 2. Clean employeeId (handles 205514534.0 → 205514534)
+    const empId = normalizeId(r[A_ID]);
     if (!empId) continue;
 
+    // 3. Must be accepted
     const accCountOk = A_ACC ? Number(r[A_ACC]) > 0 : false;
     const accFlagOk  = A_FLG ? String(r[A_FLG]).trim().toLowerCase() === "true" : false;
     if (!(accCountOk || accFlagOk)) continue;
     acceptedPass++;
 
-    const dISO = dateFromTs(r[A_S1]) || dateFromTs(r[A_S2]) ||
-                 dateFromTs(r[A_T1]) || dateFromTs(r[A_T2]);
+    // 4. Must match the selected date
+    const dISO = dateFromTs(r[A_S1]) || dateFromTs(r[A_S2]) || dateFromTs(r[A_T1]) || dateFromTs(r[A_T2]);
     if (dISO !== isoDate) continue;
     datePass++;
 
+    // 5. Must have valid type
     const tClass = classifyType(r[A_TYP]);
     if (!tClass) continue;
     typePass++;
 
+    // 6. Must exist in Roster (for department classification)
     const rosterEntry = byId.get(empId);
     if (!rosterEntry) continue;
     rosterPass++;
 
-    const oppId = A_OPID ? (r[A_OPID]||"") : "";
+    // 7. Deduping
+    const oppId = A_OPID ? (r[A_OPID] || "") : "";
     const k1 = `${empId}|${dISO}|${tClass}|${oppId}`;
     if (firstLevel.has(k1)) continue;
     firstLevel.add(k1);
@@ -386,9 +389,9 @@ if (vetRaw && vetRaw.length) {
     perType[tClass].add(k2);
   }
 
-  // --- Collapse and enforce VTO precedence ---
-  const pairsVTO = new Set([...perType.VTO].map(k=>k.split("|").slice(0,2).join("|")));
-  const pairsVET = new Set([...perType.VET].map(k=>k.split("|").slice(0,2).join("|")));
+  // 8. Apply VTO precedence (VTO overrides VET)
+  const pairsVTO = new Set([...perType.VTO].map(k => k.split("|").slice(0,2).join("|")));
+  const pairsVET = new Set([...perType.VET].map(k => k.split("|").slice(0,2).join("|")));
 
   for (const p of pairsVTO) vtoSet.add(p.split("|")[0]);
   for (const p of pairsVET) if (!pairsVTO.has(p)) vetSet.add(p.split("|")[0]);
