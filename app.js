@@ -1,6 +1,3 @@
-<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
-
-<script>
 // ================= CONFIG / LOAD SETTINGS =================
 const SETTINGS_URL = new URL("settings.json", document.baseURI).href + "?v=" + Date.now();
 const DEFAULT_SETTINGS = {
@@ -92,9 +89,8 @@ function switchTab(which){
 }
 
 function updateRibbonStatic(){
-    // Use an ISO date for reliable weekday calculation
     const isoDate = dateEl.value;
-    const dateObj = new Date(isoDate + "T12:00:00"); // Use noon to avoid timezone issues
+    const dateObj = new Date(isoDate + "T12:00:00");
     chipDay.textContent = dateObj.toLocaleDateString("en-US",{weekday:"long"});
     chipShift.textContent = shiftEl.value;
     chipCorners.textContent = ""; chipCornerSource.textContent = "";
@@ -106,8 +102,6 @@ const canon = s => String(s||"").trim().toLowerCase().replace(/\s+/g," ");
 function normalizeId(v) {
     if (v == null) return "";
     const s = String(v).trim();
-    // Replaced the complex regex with a simpler one that handles the .0 but keeps non-numeric for other IDs if needed.
-    // Given the context (Amazon IDs), we prioritize removing non-digits.
     const clean = s.replace(/\.0$/, "").replace(/\u200b/g, "").replace(/\s/g, "");
     return clean.replace(/^0+/, ""); // remove leading zeros
 }
@@ -118,7 +112,7 @@ function toISODate(d){
     if (!d) return null;
     const t = String(d).trim();
     const noTime = t.replace(/[T ]\d.*$/,"");
-    const dt = new Date(noTime + "T12:00:00"); // Add time to avoid timezone issues
+    const dt = new Date(noTime + "T12:00:00");
     if (!isNaN(dt) && dt.toISOString()) return dt.toISOString().slice(0,10);
     const mdy=/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/;
     const ymd=/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$/;
@@ -166,7 +160,6 @@ function parseCSVFile(file, opts={header:true, skipFirstLine:false}){
                 const i=text.indexOf("\n");
                 text = i>=0 ? text.slice(i+1) : text;
             }
-            // PapaParse must be loaded for this line to work!
             if (typeof Papa === 'undefined') {
                 return reject(new Error("PapaParse library is missing. Ensure you include the script tag for PapaParse."));
             }
@@ -240,7 +233,6 @@ async function processAll(){
         for (const r of mytimeRaw){
             const id = normalizeId(r[M_ID]); if (!id) continue;
             const val = presentVal(r[M_ON], markers) || false;
-            // Use logical OR assignment to preserve 'true' if it was already set
             onPrem.set(id, (onPrem.get(id) || false) || val);
         }
 
@@ -343,10 +335,8 @@ async function processAll(){
 
             const dateFromTs = v => {
                 const s = String(v || "").trim();
-                // Attempt to parse ISO string with optional time/timezone (e.g., 2025-10-04T07:30:00-04:00)
                 const d = parseDateLoose(s);
                 if (d) return toISODate(d);
-                // Fallback to simpler regex if parseDateLoose fails
                 const m = s.match(/^(\d{4}-\d{2}-\d{2})[T\s]/);
                 return m ? m[1] : (s.match(/^(\d{4}-\d{2}-\d{2})$/)?.[1] || null);
             };
@@ -365,13 +355,13 @@ async function processAll(){
             for (const r of vetRaw) {
                 seenRows++;
 
-                // 1. Only process Acceptance records (if A_CLASS is available)
+                // 1. Only process Acceptance records
                 if (A_CLASS) {
                     const cls = String(r[A_CLASS] || "");
                     if (!/AcceptancePostingAcceptanceRecord/i.test(cls)) continue;
                 }
 
-                // 2. Clean employeeId (handles 205514534.0 → 205514534)
+                // 2. Clean employeeId
                 const empId = normalizeId(r[A_ID]);
                 if (!empId) continue;
 
@@ -391,7 +381,7 @@ async function processAll(){
                 if (!tClass) continue;
                 typePass++;
 
-                // 6. Must exist in Roster (for department classification)
+                // 6. Must exist in Roster
                 const rosterEntry = byId.get(empId);
                 if (!rosterEntry) continue;
                 rosterPass++;
@@ -413,7 +403,6 @@ async function processAll(){
             for (const p of pairsVTO) vtoSet.add(p.split("|")[0]);
             for (const p of pairsVET) if (!pairsVTO.has(p)) vetSet.add(p.split("|")[0]);
 
-            // Corrected console log
             console.log("✅ VET/VTO Processing Summary:", {
                 seenRows, acceptedPass, datePass, typePass, rosterPass,
                 vetCount: vetSet.size, vtoCount: vtoSet.size
@@ -555,7 +544,7 @@ async function processAll(){
         const auditCounts = Object.fromEntries(auditReasons.map(r=>[r, mkRow()]));
         for (const [id, reason] of reasonOf.entries()){
             const row = byId.get(id) || fullById.get(id);
-            if (!row || !auditCounts[reason]) continue; // Added null check for safety
+            if (!row || !auditCounts[reason]) continue;
             pushCount(auditCounts[reason], row);
         }
 
@@ -575,7 +564,7 @@ async function processAll(){
         }).join("");
         auditTable.innerHTML = auditHeader + "<tbody>" + auditBody + "</tbody>";
 
-        // Audit CSV = row-level details (one line per associate with reason)
+        // Audit CSV
         const auditRows = [];
         for (const [id, reason] of reasonOf.entries()){
             const x = byId.get(id) || fullById.get(id); if (!x) continue;
@@ -586,8 +575,7 @@ async function processAll(){
         fileStatus.textContent = "Done";
     }catch(e){
         console.error(e);
-        fileStatus.textContent="Error";
-        alert(e.message || "Processing failed");
+        fileStatus.textContent="Error: " + (e.message || "Processing failed");
+        alert(e.message || "Processing failed. Check the console for details.");
     }
 }
-</script>
