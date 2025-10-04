@@ -345,12 +345,12 @@ async function processAll(){
       }
     }
 
-    // ====== VET/VTO CLASSIFICATION (day/night + robust corners) ======
+    // ====== VET/VTO CLASSIFICATION (day/night + robust corners + diagnostics) ======
     let vetSet = new Set(), vtoSet = new Set();
 
     if (vetRaw && vetRaw.length) {
       const a0 = vetRaw[0];
-      const A_CLASS = findKey(a0, ["_class","class"]);
+      // Do NOT filter by _class — some exports miss it
       const A_ID    = findKey(a0, ["employeeId","Employee ID","Person ID"]);
       const A_TYP   = findKey(a0, ["opportunity.type","Opportunity Type","Type"]);
       const A_ACC   = findKey(a0, ["opportunity.acceptedCount","Accepted Count"]);
@@ -365,7 +365,7 @@ async function processAll(){
         return m ? m[1] : null;
       };
       const classifyType = raw => {
-        const t = String(raw || "").toLowerCase();
+        const t = String(raw||"").toLowerCase();
         if (t.includes("vto") || t.includes("timeoff")) return "VTO";
         if (t.includes("vet") || t.includes("overtime")) return "VET";
         return null;
@@ -375,28 +375,42 @@ async function processAll(){
       const firstLevel = new Set();
       const perType = { VET:new Set(), VTO:new Set() };
 
+      // Diagnostics counters
+      let seenAccepted = 0, onDate = 0, onShift = 0, rosterMatch = 0, afterFilters = 0;
+      const bucketProbe = {Inbound:{AMZN:0,TEMP:0}, DA:{AMZN:0,TEMP:0}, ICQA:{AMZN:0,TEMP:0}, CRETs:{AMZN:0,TEMP:0}};
+
       for (const r of vetRaw) {
-        if (A_CLASS) {
-          const cls = String(r[A_CLASS]||"");
-          if (!/AcceptancePostingAcceptanceRecord/i.test(cls)) continue;
-        }
         const empId = normalizeId(r[A_ID]); if (!empId) continue;
 
+        // accepted?
         const accCountOk = A_ACC ? Number(r[A_ACC]) > 0 : false;
         const accFlagOk  = A_FLG ? String(r[A_FLG]).trim().toLowerCase() === "true" : false;
         if (!(accCountOk || accFlagOk)) continue;
+        seenAccepted++;
 
+        // same day?
         const dISO = dateFromTs(r[A_S1]) || dateFromTs(r[A_T1]);
         if (dISO !== isoDate) continue;
+        onDate++;
 
+        // shift
         const sType = classifyShift(r[A_S1]);
         if (!sType || sType !== wantShift) continue;
+        onShift++;
 
-        const tClass = classifyType(r[A_TYP]); if (!tClass) continue;
+        // type
+        const tClass = classifyType(r[A_TYP]);
+        if (!tClass) continue;
 
+        // roster look-up (use full roster), then UI filters
         const rosterEntry = fullById.get(empId);
-        if (!passesUIFilters(rosterEntry)) continue;
+        if (!rosterEntry) continue;
+        rosterMatch++;
 
+        if (!passesUIFilters(rosterEntry)) continue;
+        afterFilters++;
+
+        // de-dup per opp id then per (emp,date,type)
         const oppId = A_OPID ? (r[A_OPID] || "") : "";
         const k1 = `${empId}|${dISO}|${tClass}|${oppId}`;
         if (firstLevel.has(k1)) continue;
@@ -404,6 +418,20 @@ async function processAll(){
 
         const k2 = `${empId}|${dISO}|${tClass}`;
         perType[tClass].add(k2);
+
+        // live bucket probe
+        const b = (function(){
+          const dept = String(rosterEntry.deptId||"").trim();
+          const area = String(rosterEntry.area||"").trim();
+          if (cfg.ICQA.dept_ids.includes(dept) && area===String(cfg.ICQA.management_area_id)) return "ICQA";
+          if (cfg.CRETs.dept_ids.includes(dept) && area===String(cfg.CRETs.management_area_id)) return "CRETs";
+          if (cfg.DA.dept_ids.includes(dept)) return "DA";
+          if (cfg.Inbound.dept_ids.includes(dept)) return "Inbound";
+          return null;
+        })();
+        if (b && (rosterEntry.typ==="AMZN"||rosterEntry.typ==="TEMP")) {
+          bucketProbe[b][rosterEntry.typ] += 1;
+        }
       }
 
       // VTO wins over VET if both same AA same day
@@ -411,6 +439,13 @@ async function processAll(){
       const pairsVET = new Set([...perType.VET].map(k => k.split("|").slice(0,2).join("|")));
       for (const p of pairsVTO) vtoSet.add(p.split("|")[0]);
       for (const p of pairsVET) if (!pairsVTO.has(p)) vetSet.add(p.split("|")[0]);
+
+      console.log("🔎 VET/VTO diagnostics", {
+        wantShift, totalRows: vetRaw.length,
+        seenAccepted, onDate, onShift, rosterMatch, afterFilters,
+        probeByBucket: bucketProbe,
+        vetIds: [...vetSet].slice(0,10), vtoIds: [...vtoSet].slice(0,10)
+      });
 
       console.log("✅ VET/VTO by shift:", wantShift, { vet: vetSet.size, vto: vtoSet.size });
     }
@@ -467,6 +502,8 @@ async function processAll(){
     const vetPresentRows  = vetExpectedRows.filter(x=>onPrem.get(x.id)===true);
 
     // ---------- Dashboard table ----------
+    const depts = ["Inbound","DA","ICQA","CRETs"];
+    const mkRow = () => Object.fromEntries(depts.map(d=>[d,{AMZN:0,TEMP:0,TOTAL:0}]));
     const row_RegularExpected   = mkRow(); cohortExpected.forEach(x=>pushCount(row_RegularExpected,x));
     const row_RegularPresentExS = mkRow(); cohortPresentExSwaps.forEach(x=>pushCount(row_RegularPresentExS,x));
     const row_SwapOut           = mkRow(); swapOutRows.forEach(x=>pushCount(row_SwapOut,x));
@@ -484,6 +521,7 @@ async function processAll(){
           <th>Total</th>
         </tr>
       </thead>`;
+    const sumTotals = ACC => depts.reduce((s,d)=>s+ACC[d].TOTAL,0);
     const rowHTML = (label,ACC)=>{
       const cells = depts.map(d=>`<td>${ACC[d].AMZN}</td><td>${ACC[d].TEMP}</td>`).join("");
       const total = sumTotals(ACC);
