@@ -145,6 +145,19 @@ function classifyEmpType(v){
   if (/(temp|temporary|seasonal|agency|vendor|contract|white badge|wb|csg|adecco|randstad)/.test(x)) return "TEMP";
   return "UNKNOWN";
 }
+
+// Shift classifier for VET/VTO (07:00–18:59 Day, 19:00–06:30 Night)
+function classifyShift(ts){
+  if (!ts) return null;
+  const m = String(ts).match(/T(\d{2}):(\d{2})/);
+  if (!m) return null;
+  const hh = +m[1], mm = +m[2];
+  const mins = hh*60 + mm;
+  if (mins >= 7*60 && mins <= 18*60+59) return "Day";
+  if (mins >= 19*60 || mins <= 6*60+30) return "Night";
+  return null;
+}
+
 function parseCSVFile(file, opts={header:true, skipFirstLine:false}){
   return new Promise((resolve,reject)=>{
     const r=new FileReader();
@@ -169,7 +182,6 @@ function downloadCSV(filename, rows){
   const a=document.createElement("a"); a.href=url; a.download=filename; document.body.appendChild(a); a.click();
   setTimeout(()=>{URL.revokeObjectURL(url); a.remove();},0);
 }
-
 function deriveCornersFromRoster(rows){
   if (!rows || !rows.length) return [];
   const r0 = rows[0] || {};
@@ -214,6 +226,22 @@ async function processAll(){
     chipCorners.textContent = cornerCodes.join(" ");
     chipCornerSource.textContent = cornerSource==="derived" ? "(derived)" : "";
 
+    // ---- helper: apply the same UI filters that shaped roster ----
+    const passesUIFilters = (row) => {
+      if (!row) return false;
+      if (cornerCodes && cornerCodes.length){
+        const c = (row.corner || "").slice(0,2).toUpperCase();
+        const ok = cornerCodes.some(cc => c === cc.slice(0,2).toUpperCase());
+        if (!ok) return false;
+      }
+      if (newHireEl.checked && row.start instanceof Date){
+        const d0 = new Date(isoDate+"T00:00:00");
+        const days = Math.floor((d0 - row.start)/(1000*60*60*24));
+        if (days < 3) return false;
+      }
+      return true;
+    };
+
     // MyTime on-prem map
     const m0 = mytimeRaw[0] || {};
     const M_ID = findKey(m0, ["Person ID","Employee ID","Person Number","ID"]);
@@ -227,7 +255,7 @@ async function processAll(){
       onPrem.set(id, (onPrem.get(id)||false) || val);
     }
 
-    // Roster enrich
+    // Roster enrich (build full roster first)
     const r0 = rosterRaw[0] || {};
     const R_ID   = findKey(r0, ["Employee ID","Person Number","Person ID","Badge ID","ID"]);
     const R_DEPT = findKey(r0, ["Department ID","Home Department ID","Dept ID"]);
@@ -241,7 +269,8 @@ async function processAll(){
     const first2 = s=> (s||"").slice(0,2);
     const firstAndThird = s => (s?.length>=3 ? s[0]+s[2] : "");
 
-    let roster = rosterRaw.map(r=>{
+    // full roster rows (no UI filtering)
+    const rosterFullRows = rosterRaw.map(r=>{
       const id = normalizeId(r[R_ID]);
       const deptId = String(r[R_DEPT]??"").trim();
       const area = String((R_AREA? r[R_AREA] : "")??"").trim();
@@ -253,12 +282,14 @@ async function processAll(){
       const onp = onPrem.get(id)===true;
       return { id, deptId, area, typ, corner, met, start, onp };
     });
-    const fullById = new Map(roster.map(x=>[x.id,x]));
 
-    // filter by corners
-    if (cornerCodes.length) roster = roster.filter(x=>cornerCodes.includes(x.corner));
+    const fullById = new Map(rosterFullRows.map(x=>[x.id,x])); // used by VET/VTO
 
-    // exclude new hires
+    // Apply UI filters to get working roster slice for dashboard
+    let roster = rosterFullRows.slice();
+
+    if (cornerCodes.length) roster = roster.filter(x=>cornerCodes.some(cc => (x.corner||"").slice(0,2).toUpperCase() === cc.slice(0,2).toUpperCase()));
+
     if (newHireEl.checked){
       const d0 = new Date(isoDate+"T00:00:00");
       roster = roster.filter(x=>{
@@ -268,16 +299,20 @@ async function processAll(){
       });
     }
 
+    const byId = new Map(roster.map(x=>[x.id,x])); // filtered
+
     // dept helpers
     const cfg = SETTINGS.departments;
-    const DA_IDS = cfg.DA.dept_ids;
-    const isInbound = x => cfg.Inbound.dept_ids.includes(x.deptId) && !DA_IDS.includes(x.deptId);
-    const isDA      = x => DA_IDS.includes(x.deptId);
-    const isICQA    = x => cfg.ICQA.dept_ids.includes(x.deptId) && x.area===cfg.ICQA.management_area_id;
-    const isCRETs   = x => cfg.CRETs.dept_ids.includes(x.deptId) && x.area===cfg.CRETs.management_area_id;
-    const bucketOf  = x => isInbound(x) ? "Inbound" : isDA(x) ? "DA" : isICQA(x) ? "ICQA" : isCRETs(x) ? "CRETs" : "Other";
-
     const depts = ["Inbound","DA","ICQA","CRETs"];
+    const bucketOf = x => {
+      const dept = String(x.deptId || "").trim();
+      const area = String(x.area || "").trim();
+      if (cfg.ICQA.dept_ids.includes(dept) && area === String(cfg.ICQA.management_area_id)) return "ICQA";
+      if (cfg.CRETs.dept_ids.includes(dept) && area === String(cfg.CRETs.management_area_id)) return "CRETs";
+      if (cfg.DA.dept_ids.includes(dept)) return "DA";
+      if (cfg.Inbound.dept_ids.includes(dept)) return "Inbound";
+      return "Other";
+    };
     const mkRow = () => Object.fromEntries(depts.map(d=>[d,{AMZN:0,TEMP:0,TOTAL:0}]));
     const pushCount = (ACC, row)=>{
       const b=bucketOf(row); if (!depts.includes(b)) return;
@@ -286,11 +321,9 @@ async function processAll(){
     };
     const sumTotals = ACC => depts.reduce((s,d)=>s+ACC[d].TOTAL,0);
 
-    const byId = new Map(roster.map(x=>[x.id,x]));
-
     // ====== Hours Summary: Vacation (>=10h) & Banked Holiday (>=12h) ======
-    const vacSet = new Set();       // Vacation/PTO
-    const bhSet  = new Set();       // Banked Holiday
+    const vacSet = new Set();
+    const bhSet  = new Set();
     if (vacRaw.length){
       const v0 = vacRaw[0];
       const V_ID = findKey(v0, ["Employee ID","Person ID","Person Number","Badge ID","ID"]);
@@ -310,22 +343,13 @@ async function processAll(){
     // ====== PostingAcceptance: VET/VTO (SOP: Status -> AcceptedCount=1 -> Date) ======
 // ====== PostingAcceptance: VET/VTO (EmployeeID-based, float-safe, VTO-wins) ======
 
-// --- Universal ID normalization (handles float/int/string) ---
-const normalizeId = v => {
-  if (v == null) return "";
-  const s = String(v).trim();
-  // Handles cases like 205514534.0 → 205514534
-  const clean = s.replace(/\.0$/, "").replace(/\D/g, "");
-  return clean.replace(/^0+/, ""); // remove leading zeros
-};
-
 const vetSet = new Set(); // employee IDs with VET for isoDate
 const vtoSet = new Set(); // employee IDs with VTO for isoDate
 
 if (vetRaw && vetRaw.length) {
-  const a0 = vetRaw[0];
 
   // --- Column detection ---
+  const a0 = vetRaw[0];
   const A_CLASS = findKey(a0, ["_class", "class"]);
   const A_ID    = findKey(a0, ["employeeId", "Employee ID", "Person ID"]);
   const A_TYP   = findKey(a0, ["opportunity.type", "Opportunity Type", "Type"]);
@@ -356,7 +380,6 @@ if (vetRaw && vetRaw.length) {
   const firstLevel = new Set();  // id|date|type|oppId
   const perType = { VET: new Set(), VTO: new Set() };
 
-  // --- Parse rows ---
   for (const r of vetRaw) {
     seenRows++;
 
@@ -381,6 +404,10 @@ if (vetRaw && vetRaw.length) {
                  dateFromTs(r[A_T1]) || dateFromTs(r[A_T2]);
     if (dISO !== isoDate) continue;
     datePass++;
+
+    // 5) Shift match (Day/Night)
+    const sType = classifyShift(r[A_S1]);
+    if (!sType || sType !== shiftEl.value) continue;
 
     // 5) Type classification
     const tClass = classifyType(r[A_TYP]);
@@ -414,6 +441,7 @@ if (vetRaw && vetRaw.length) {
     vetCount: vetSet.size, vtoCount: vtoSet.size
   });
 }
+
     // ====== Swaps ======
     const collectSwaps=(rows,mapping)=>{
       const out=[], inn=[];
@@ -428,9 +456,9 @@ if (vetRaw && vetRaw.length) {
         const id = normalizeId(r[S_ID]); if (!id) continue;
         const st = String(r[S_ST] ?? "Approved").toUpperCase();
         const ok = !S_ST || APPROVED.includes(st) || /APPROVED|COMPLETED|ACCEPTED/.test(st);
-        if (!ok) continue;
         const skipISO = toISODate(r[S_SKIP]);
         const workISO = toISODate(r[S_WORK]);
+        if (!ok) continue;
         if (skipISO===isoDate) out.push(id);
         if (workISO===isoDate) inn.push(id);
       }
@@ -443,7 +471,9 @@ if (vetRaw && vetRaw.length) {
     const swapInSet  = new Set([...S1.inn, ...S2.inn]);
 
     // ====== Build cohorts ======
-    // Exclusions from "expected": Vacation, Banked Holiday, VTO, Swap-Out (priority Vacation > BH > VTO > Swap-Out)
+    const normalizeSet = s => new Set([...s].map(id => normalizeId(id)));
+    // (VET/VTO sets already normalized; keeping for others)
+    // Exclusions from "expected": Vacation > BH > VTO > Swap-Out
     const excluded = new Set();
     for (const id of vacSet) if (byId.has(id)) excluded.add(id);
     for (const id of bhSet)  if (byId.has(id) && !excluded.has(id)) excluded.add(id);
@@ -495,7 +525,7 @@ if (vetRaw && vetRaw.length) {
       + rowHTML("VET Present", row_VETPresent)
       + "</tbody>";
 
-    // ---------- Ribbon chips for Vacation / BH with CSV links ----------
+    // ---------- Ribbon chips ----------
     const vacRows = [...vacSet].map(id=>byId.get(id)||fullById.get(id)).filter(Boolean).map(x=>({
       id:x.id, dept_bucket:bucketOf(x), emp_type:x.typ, corner:x.corner, date:isoDate, reason:"Vacation"
     }));
@@ -570,7 +600,6 @@ if (vetRaw && vetRaw.length) {
     }).join("");
     auditTable.innerHTML = auditHeader + "<tbody>" + auditBody + "</tbody>";
 
-    // Audit CSV = row-level details (one line per associate with reason)
     const auditRows = [];
     for (const [id, reason] of reasonOf.entries()){
       const x = byId.get(id) || fullById.get(id); if (!x) continue;
