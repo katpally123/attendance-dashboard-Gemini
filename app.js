@@ -96,14 +96,12 @@ function updateRibbonStatic(){
 
 // ================== HELPERS ==================
 const canon = s => String(s||"").trim().toLowerCase().replace(/\s+/g," ");
-
 function normalizeId(v) {
   if (v == null) return "";
   const s = String(v).trim();
-  const clean = s.replace(/\.0$/, "").replace(/\D/g, "");
-  return clean.replace(/^0+/, "");
+  const clean = s.replace(/\.0$/,"").replace(/\s+/g,"").replace(/\u200b/g,"");
+  return clean.replace(/\D/g,"").replace(/^0+/,"");
 }
-
 const presentVal = (val, markers) => markers.includes(String(val||"").trim().toUpperCase());
 const parseDateLoose = s => { const d=new Date(s); return isNaN(d)?null:d; };
 
@@ -153,6 +151,7 @@ function classifyEmpType(v){
 // Shift classifier for VET/VTO
 function classifyShift(ts){
   if (!ts) return null;
+  // Accepts "2025-10-04T07:30:00-04:00" or similar
   const m = String(ts).match(/T(\d{2}):(\d{2})/);
   if (!m) return null;
   const hh = +m[1], mm = +m[2];
@@ -250,7 +249,7 @@ async function processAll(){
     // MyTime on-prem map
     const m0 = mytimeRaw[0] || {};
     const M_ID = findKey(m0, ["Person ID","Employee ID","Person Number","ID"]);
-    const M_ON = findKey(m0, ["On Premises","On Premises?","OnPremises"]);
+    const M_ON = findKey(m0, ["On Premises","On Premises?","OnPremises","Premises"]);
     if (!M_ID || !M_ON) throw new Error("MyTime must include Person/Employee ID and On Premises.");
     const onPrem = new Map();
     const markers = (SETTINGS.present_markers||["X"]).map(s=>String(s).toUpperCase());
@@ -345,7 +344,7 @@ async function processAll(){
       }
     }
 
-    // ====== VET/VTO CLASSIFICATION (day/night + robust corners) ======
+    // ====== VET/VTO CLASSIFICATION (matches your pandas) ======
     let vetSet = new Set(), vtoSet = new Set();
 
     if (vetRaw && vetRaw.length) {
@@ -371,46 +370,59 @@ async function processAll(){
         return null;
       };
 
-      const wantShift = shiftEl.value; // "Day" or "Night"
-      const firstLevel = new Set();
-      const perType = { VET:new Set(), VTO:new Set() };
+      const wantShift = shiftEl.value; // "Day" | "Night"
+      const dedupeLevel1 = new Set();  // emp|date|type|oppId
+      const perType = { VET:new Set(), VTO:new Set() }; // emp|date|type
 
       for (const r of vetRaw) {
+        // Filter to proper record type if present
         if (A_CLASS) {
           const cls = String(r[A_CLASS]||"");
           if (!/AcceptancePostingAcceptanceRecord/i.test(cls)) continue;
         }
         const empId = normalizeId(r[A_ID]); if (!empId) continue;
 
+        // Accepted?
         const accCountOk = A_ACC ? Number(r[A_ACC]) > 0 : false;
         const accFlagOk  = A_FLG ? String(r[A_FLG]).trim().toLowerCase() === "true" : false;
         if (!(accCountOk || accFlagOk)) continue;
 
+        // Date filter (by shiftStart or acceptance)
         const dISO = dateFromTs(r[A_S1]) || dateFromTs(r[A_T1]);
         if (dISO !== isoDate) continue;
 
+        // Shift filter
         const sType = classifyShift(r[A_S1]);
         if (!sType || sType !== wantShift) continue;
 
+        // Type (VET/VTO)
         const tClass = classifyType(r[A_TYP]); if (!tClass) continue;
 
+        // Pass UI roster filters (corner/new hire)
         const rosterEntry = fullById.get(empId);
         if (!passesUIFilters(rosterEntry)) continue;
 
+        // Dedupe by opportunity id (if present)
         const oppId = A_OPID ? (r[A_OPID] || "") : "";
         const k1 = `${empId}|${dISO}|${tClass}|${oppId}`;
-        if (firstLevel.has(k1)) continue;
-        firstLevel.add(k1);
+        if (dedupeLevel1.has(k1)) continue;
+        dedupeLevel1.add(k1);
 
+        // Collapse to emp|date|type
         const k2 = `${empId}|${dISO}|${tClass}`;
         perType[tClass].add(k2);
       }
 
-      // VTO wins over VET if both same AA same day
+      // If an AA took both VTO and VET for same date, VTO wins (exclude from VET)
       const pairsVTO = new Set([...perType.VTO].map(k => k.split("|").slice(0,2).join("|")));
       const pairsVET = new Set([...perType.VET].map(k => k.split("|").slice(0,2).join("|")));
       for (const p of pairsVTO) vtoSet.add(p.split("|")[0]);
       for (const p of pairsVET) if (!pairsVTO.has(p)) vetSet.add(p.split("|")[0]);
+
+      // Normalize to numeric-only IDs
+      const normSet = s => new Set([...s].map(normalizeId));
+      vetSet = normSet(vetSet);
+      vtoSet = normSet(vtoSet);
 
       console.log("✅ VET/VTO by shift:", wantShift, { vet: vetSet.size, vto: vtoSet.size });
     }
@@ -440,14 +452,10 @@ async function processAll(){
     const mapping = SETTINGS.swap_mapping || DEFAULT_SETTINGS.swap_mapping;
     const S1 = collectSwaps(swapOutRaw, mapping);
     const S2 = collectSwaps(swapInRaw,  mapping);
-    const swapOutSet = new Set([...S1.out, ...S2.out]);
-    const swapInSet  = new Set([...S1.inn, ...S2.inn]);
+    const swapOutSet = new Set([...S1.out, ...S2.out].map(normalizeId));
+    const swapInSet  = new Set([...S1.inn, ...S2.inn].map(normalizeId));
 
     // ====== Build cohorts ======
-    const normalizeSet = s => new Set([...s].map(id => normalizeId(id)));
-    vetSet = normalizeSet(vetSet);
-    vtoSet = normalizeSet(vtoSet);
-
     // Exclusions from "expected": Vacation > BH > VTO > Swap-Out
     const excluded = new Set();
     for (const id of vacSet) if (byId.has(id)) excluded.add(id);
@@ -459,7 +467,8 @@ async function processAll(){
     const cohortPresentExSwaps = cohortExpected.filter(x=>x.onp);
 
     // rows for display
-    const swapOutRows        = [...swapOutSet].map(id=>byId.get(id)).filter(Boolean);
+    const byId = new Map(cohortExpected.map(x=>[x.id,x])); // filtered expected slice
+    const swapOutRows        = [...swapOutSet].map(id=>fullById.get(id)).filter(Boolean).filter(passesUIFilters);
     const swapInExpectedRows = [...swapInSet].map(id=>fullById.get(id)).filter(Boolean).filter(passesUIFilters);
     const swapInPresentRows  = swapInExpectedRows.filter(x=>onPrem.get(x.id)===true);
 
@@ -472,7 +481,7 @@ async function processAll(){
     const row_SwapOut           = mkRow(); swapOutRows.forEach(x=>pushCount(row_SwapOut,x));
     const row_SwapInExpected    = mkRow(); swapInExpectedRows.forEach(x=>pushCount(row_SwapInExpected,x));
     const row_SwapInPresent     = mkRow(); swapInPresentRows.forEach(x=>pushCount(row_SwapInPresent,x));
-    const row_VTO               = mkRow(); [...vtoSet].map(id=>byId.get(id)||fullById.get(id)).filter(Boolean).forEach(x=>pushCount(row_VTO,x));
+    const row_VTO               = mkRow(); [...vtoSet].map(id=>fullById.get(id)).filter(Boolean).filter(passesUIFilters).forEach(x=>pushCount(row_VTO,x));
     const row_VETExpected       = mkRow(); vetExpectedRows.forEach(x=>pushCount(row_VETExpected,x));
     const row_VETPresent        = mkRow(); vetPresentRows.forEach(x=>pushCount(row_VETPresent,x));
 
@@ -501,10 +510,10 @@ async function processAll(){
       + "</tbody>";
 
     // ---------- Ribbon chips ----------
-    const vacRows = [...vacSet].map(id=>byId.get(id)||fullById.get(id)).filter(Boolean).map(x=>({
+    const vacRows = [...vacSet].map(id=>fullById.get(id)).filter(Boolean).filter(passesUIFilters).map(x=>({
       id:x.id, dept_bucket:bucketOf(x), emp_type:x.typ, corner:x.corner, date:isoDate, reason:"Vacation"
     }));
-    const bhRows  = [...bhSet].map(id=>byId.get(id)||fullById.get(id)).filter(Boolean).map(x=>({
+    const bhRows  = [...bhSet].map(id=>fullById.get(id)).filter(Boolean).filter(passesUIFilters).map(x=>({
       id:x.id, dept_bucket:bucketOf(x), emp_type:x.typ, corner:x.corner, date:isoDate, reason:"Banked Holiday"
     }));
     chipVacationCount.textContent = vacRows.length;
@@ -527,7 +536,7 @@ async function processAll(){
     // ================= AUDIT TABLE =================
     // Priority: Vacation > BH > VTO > Swap-Out > VET-not-shown > No-Show
     const reasonOf = new Map(); // id -> reason
-    const tag = (ids, reason)=>{ for (const id of ids){ if (byId.has(id) && !reasonOf.has(id)) reasonOf.set(id, reason); } };
+    const tag = (ids, reason)=>{ for (const id of ids){ const x = fullById.get(id); if (x && passesUIFilters(x) && !reasonOf.has(id)) reasonOf.set(id, reason); } };
 
     tag(vacSet, "Vacation / PTO");
     tag(bhSet,  "Banked Holiday");
