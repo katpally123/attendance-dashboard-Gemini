@@ -24,6 +24,10 @@ document.addEventListener("DOMContentLoaded", bootSafe);
 
 function mustGet(id){ const el=document.getElementById(id); if(!el) throw new Error(`Missing element #${id}`); return el; }
 
+// Caches for download buttons (so they work even if clicked later)
+let noShowsCache = null;
+let auditRowsCache = null;
+
 async function bootSafe(){
   try{
     // Required controls (match your HTML exactly)
@@ -78,10 +82,35 @@ async function bootSafe(){
     dateEl.addEventListener("change", updateRibbonStatic);
     shiftEl.addEventListener("change", updateRibbonStatic);
 
-    // Buttons
+    // Process
     processBtn.addEventListener("click", processAll);
-    document.getElementById("dlNoShow").addEventListener("click", ()=> _downloadNoShow?.());
-    document.getElementById("dlAuditCSV").addEventListener("click", ()=> _downloadAudit?.());
+
+    // Download buttons (guarded, always respond)
+    const btnNoShow   = document.getElementById("dlNoShow");
+    const btnAuditCSV = document.getElementById("dlAuditCSV");
+
+    btnNoShow.addEventListener("click", (e) => {
+      e.preventDefault();
+      if (!Array.isArray(noShowsCache)) {
+        alert("Process files first to generate the No-Show list.");
+        return;
+      }
+      downloadCSV(`no_shows_${dateEl.value}.csv`,
+        noShowsCache.length ? noShowsCache
+                            : [{id:"",dept_bucket:"",emp_type:"",corner:"",date:dateEl.value,reason:"No-Show"}]);
+    });
+
+    btnAuditCSV.addEventListener("click", (e) => {
+      e.preventDefault();
+      if (!Array.isArray(auditRowsCache)) {
+        alert("Process files first to generate the Audit list.");
+        return;
+      }
+      downloadCSV(`audit_${dateEl.value}.csv`,
+        auditRowsCache.length ? auditRowsCache
+                              : [{id:"",dept_bucket:"",emp_type:"",corner:"",date:dateEl.value,reason:""}]);
+    });
+
   }catch(e){
     console.error(e);
     alert(e.message);
@@ -198,9 +227,6 @@ function deriveCornersFromRoster(rows){
 }
 
 // ================= PROCESS =================
-let _downloadNoShow = null;
-let _downloadAudit = null;
-
 async function processAll(){
   fileStatus.textContent = "Parsing…";
   try{
@@ -450,9 +476,9 @@ async function processAll(){
     chipVacation.href = buildURL(vacRows.length?vacRows:[{id:"",dept_bucket:"",emp_type:"",corner:"",date:isoDate,reason:"Vacation"}]);
     chipBH.href       = buildURL(bhRows.length?bhRows:[{id:"",dept_bucket:"",emp_type:"",corner:"",date:isoDate,reason:"Banked Holiday"}]);
 
-    // No-show CSV & Audit CSV (stable functions; buttons are static in your HTML)
+    // ===== No-show CSV & Audit CSV (cache for static buttons) =====
     const noShows = cohortExpected.filter(x=>!x.onp).map(x=>({id:x.id,dept_bucket:bucketOf(x),emp_type:x.typ,corner:x.corner,date:isoDate,reason:"No-Show"}));
-    _downloadNoShow = ()=> downloadCSV(`no_shows_${isoDate}.csv`, noShows.length?noShows:[{id:"",dept_bucket:"",emp_type:"",corner:"",date:isoDate,reason:"No-Show"}]);
+    noShowsCache = noShows;   // cache for button
 
     // ===== Audit table =====
     const reasonOf=new Map();
@@ -487,7 +513,19 @@ async function processAll(){
     auditTable.innerHTML = auditHeader + "<tbody>" + auditBody + "</tbody>";
 
     const auditRows=[]; for(const [id,reason] of reasonOf.entries()){ const x=byId.get(id)||fullById.get(id); if(x) auditRows.push({id:x.id,dept_bucket:bucketOf(x),emp_type:x.typ,corner:x.corner,date:isoDate,reason}); }
-    _downloadAudit = ()=> downloadCSV(`audit_${isoDate}.csv`, auditRows.length?auditRows:[{id:"",dept_bucket:"",emp_type:"",corner:"",date:isoDate,reason:""}]);
+    auditRowsCache = auditRows;  // cache for button
+
+    // (Optional) also wire per-run handlers exactly like your older style
+    document.getElementById("dlNoShow").onclick = () => {
+      downloadCSV(`no_shows_${isoDate}.csv`,
+        noShows.length ? noShows
+                       : [{id:"",dept_bucket:"",emp_type:"",corner:"",date:isoDate,reason:"No-Show"}]);
+    };
+    document.getElementById("dlAuditCSV").onclick = () => {
+      downloadCSV(`audit_${isoDate}.csv`,
+        auditRows.length ? auditRows
+                         : [{id:"",dept_bucket:"",emp_type:"",corner:"",date:isoDate,reason:""}]);
+    };
 
     fileStatus.textContent = "Done";
   }catch(e){
