@@ -206,7 +206,17 @@ function deriveCornersFromRoster(rows){
   }
   return [...set];
 }
-
+// Classify Day/Night from a timestamp *in local time* (handles Z and ±HH:MM)
+function classifyShiftLocal(ts){
+  if (!ts) return null;
+  const d = new Date(String(ts).trim());
+  if (isNaN(d)) return null;
+  const hh = d.getHours(), mm = d.getMinutes();
+  const mins = hh*60 + mm;
+  // Define Day = 07:00–18:59 local; Night = otherwise
+  if (mins >= 7*60 && mins <= 18*60+59) return "Day";
+  return "Night";
+}
 // ================== PROCESS ==================
 async function processAll(){
   fileStatus.textContent = "Parsing…";
@@ -355,27 +365,25 @@ async function processAll(){
         else if (hrs >= 10 && /(vac|pto)/.test(code)) vacSet.add(id);
       }
     }
-
-    // ====== PostingAcceptance: VET/VTO (robust) ======
+/* ====== PostingAcceptance: VET/VTO (robust, local-shift aware) ====== */
 let vetSet = new Set();
 let vtoSet = new Set();
 
 if (vetRaw && vetRaw.length) {
   const a0 = vetRaw[0];
 
-  // Column detection (broader)
-  const A_CLASS  = findKey(a0, ["_class","class"]);
-  const A_ID     = findKey(a0, ["employeeId","Employee ID","Person ID","Person Number","EID"]);
-  const A_LOGIN  = findKey(a0, ["employeeLogin","Employee Login","login","user","username"]);
-  const A_TYP    = findKey(a0, ["opportunity.type","Opportunity Type","Type","opportunity.opportunityType","postingType"]);
-  const A_ACC    = findKey(a0, ["opportunity.acceptedCount","Accepted Count","acceptedCount","accepted"]);
-  const A_FLAG   = findKey(a0, ["isAccepted","employeeAccepted","is Manual","isManual","acceptedFlag"]);
-  const A_STAT   = findKey(a0, ["status","opportunity.status","employeeStatus"]);
-  const A_S1     = findKey(a0, ["opportunity.shiftStart","shiftStart","start","opportunity.start"]);
-  const A_T1     = findKey(a0, ["acceptanceTime","acceptedAt","createdAt"]);
-  const A_OPID   = findKey(a0, ["opportunity.id","opportunityId","Opportunity Id","id"]);
+  // Flexible column detection
+  const A_CLASS = findKey(a0, ["_class","class"]);
+  const A_ID    = findKey(a0, ["employeeId","Employee ID","Person ID","Person Number","EID"]);
+  const A_LOGIN = findKey(a0, ["employeeLogin","Employee Login","login","user","username"]);
+  const A_TYP   = findKey(a0, ["opportunity.type","Opportunity Type","Type","opportunity.opportunityType","postingType"]);
+  const A_ACC   = findKey(a0, ["opportunity.acceptedCount","Accepted Count","acceptedCount","accepted"]);
+  const A_FLAG  = findKey(a0, ["isAccepted","employeeAccepted","is Manual","isManual","acceptedFlag"]);
+  const A_STAT  = findKey(a0, ["status","opportunity.status","employeeStatus"]);
+  const A_S1    = findKey(a0, ["opportunity.shiftStart","shiftStart","start","opportunity.start"]);
+  const A_T1    = findKey(a0, ["acceptanceTime","acceptedAt","createdAt"]);
+  const A_OPID  = findKey(a0, ["opportunity.id","opportunityId","Opportunity Id","id"]);
 
-  // Helpers
   const dateFromTs = v => {
     const s = String(v||"").trim();
     const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
@@ -384,11 +392,11 @@ if (vetRaw && vetRaw.length) {
   const typeClass = raw => {
     const t = String(raw||"").toLowerCase();
     if (t.includes("vto") || t.includes("timeoff")) return "VTO";
-    if (t.includes("vet") || t.includes("overtime")) return "VET"; // “VoluntaryOvertime…”
+    if (t.includes("vet") || t.includes("overtime")) return "VET";
     return null;
   };
   const wasAccepted = r => {
-    const cnt = A_ACC ? Number(r[A_ACC]) : NaN;
+    const cnt  = A_ACC  ? Number(r[A_ACC]) : NaN;
     const flag = A_FLAG ? String(r[A_FLAG]).trim().toLowerCase() : "";
     const stat = A_STAT ? String(r[A_STAT]).trim().toUpperCase() : "";
     return (Number.isFinite(cnt) && cnt > 0)
@@ -396,20 +404,20 @@ if (vetRaw && vetRaw.length) {
         || stat === "ACCEPTED" || stat === "APPROVED" || stat === "COMPLETED";
   };
 
-  // NOTE: we do NOT enforce shift Day/Night here anymore.
-  // Too many exports are UTC and misclassify. Your corner filter + date is enough.
-  const wantDate = dateEl.value;
-  const firstLevel = new Set();
-  const perType = { VET: new Set(), VTO: new Set() };
+  const wantDate  = dateEl.value;        // yyyy-mm-dd
+  const wantShift = shiftEl.value;       // "Day" | "Night"
+
+  const firstLevel = new Set();          // empId|date|type|oppId (dedupe)
+  const perType = { VET: new Set(), VTO: new Set() }; // empId|date|type
 
   for (const r of vetRaw) {
-    // If _class exists, keep only PostingAcceptance records
+    // Keep only PostingAcceptance records if class is present
     if (A_CLASS) {
       const cls = String(r[A_CLASS]||"");
       if (!/AcceptancePostingAcceptanceRecord/i.test(cls)) continue;
     }
 
-    // Resolve EID
+    // Resolve EID (direct or via login -> roster)
     let empId = A_ID ? normalizeId(r[A_ID]) : "";
     if (!empId && A_LOGIN) {
       const lg = normLogin(r[A_LOGIN]);
@@ -420,18 +428,22 @@ if (vetRaw && vetRaw.length) {
     // Accepted?
     if (!wasAccepted(r)) continue;
 
-    // Date filter -> isoDate
+    // Date filter
     const dISO = dateFromTs(r[A_S1]) || dateFromTs(r[A_T1]);
     if (dISO !== wantDate) continue;
 
-    // Type -> VET / VTO
+    // Type
     const tClass = typeClass(r[A_TYP]);
     if (!tClass) continue;
 
-    // IMPORTANT: allow anyone who exists in the FULL roster (not corner-filtered).
+    // Shift filter (LOCAL time from timestamp)
+    const sType = classifyShiftLocal(r[A_S1] || r[A_T1]);
+    if (sType && sType !== wantShift) continue;
+
+    // Must exist somewhere in roster (use FULL roster, not corner-filtered)
     if (!fullById.has(empId)) continue;
 
-    // Dedupe (oppId if present)
+    // Dedupe by opportunity
     const oppId = A_OPID ? (r[A_OPID] || "") : "";
     const k1 = `${empId}|${dISO}|${tClass}|${oppId}`;
     if (firstLevel.has(k1)) continue;
@@ -441,7 +453,7 @@ if (vetRaw && vetRaw.length) {
     perType[tClass].add(k2);
   }
 
-  // Collapse per employee/day/type and enforce VTO precedence
+  // Collapse per employee/day/type and enforce VTO precedence over VET
   const pairsVTO = new Set([...perType.VTO].map(k => k.split("|").slice(0,2).join("|")));
   const pairsVET = new Set([...perType.VET].map(k => k.split("|").slice(0,2).join("|")));
 
@@ -452,11 +464,8 @@ if (vetRaw && vetRaw.length) {
 
   vetSet = normalizeSet(vetRawSet);
   vtoSet = normalizeSet(vtoRawSet);
-
-  // After building sets from FULL roster, we’ll map them back into the current filtered slice:
-  // (this is already done later when we create rows via byId || fullById)
 }
-
+// (rest of your pipeline will map these IDs to byId/fullById and build tables)
     // ====== Swaps ======
     const collectSwaps=(rows,mapping)=>{
       const out=[], inn=[];
