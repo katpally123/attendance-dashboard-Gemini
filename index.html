@@ -3,18 +3,28 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>PXT Attendance Dashboard</title>
+
+  <!-- Updated title + favicon -->
+  <title>PXT Pheonix — Attendance Dashboard</title>
+  <link rel="icon" type="image/png" href="assets/yhm2-logo.png"/>
+
   <link rel="stylesheet" href="style.css"/>
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
   <script defer src="app.js"></script>
 </head>
 <body>
   <header>
-    <div class="logo">PXT Attendance</div>
+    <!-- Logo + Name (keeps your original header structure) -->
+    <div class="logo" style="display:flex;align-items:center;gap:10px;">
+      <img src="assets/yhm2-logo.png" alt="YHM2 logo" style="width:36px;height:36px;object-fit:contain"/>
+      <span>PXT Pheonix</span>
+    </div>
+
     <nav class="tabs">
       <button id="tabDashboard" class="tab active">Dashboard</button>
       <button id="tabAudit" class="tab">Audit</button>
     </nav>
+
     <div class="actions">
       <button id="processBtn" class="btn">Process Files</button>
       <span id="fileStatus" class="chip chip-muted">Ready</span>
