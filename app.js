@@ -1,3 +1,6 @@
+// === Branding ===
+const APP_NAME = "PXT Pheonix";
+document.title = `${APP_NAME} — Attendance Dashboard`;
 // ================= CONFIG / LOAD SETTINGS =================
 const SETTINGS_URL = new URL("settings.json", document.baseURI).href + "?v=" + Date.now();
 const DEFAULT_SETTINGS = {
