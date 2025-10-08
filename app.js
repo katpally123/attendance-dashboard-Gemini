@@ -61,9 +61,6 @@ const auditTable = document.getElementById("auditTable");
 const btnNoShow = document.getElementById("dlNoShow");
 const btnAuditCSV = document.getElementById("dlAuditCSV");
 
-// === globals used by buttons ===
-let COHORT_EXPECTED_ROWS = [];   // safe default
-
 // ================== INIT ==================
 (async function boot(){
   try {
@@ -220,17 +217,9 @@ function classifyShiftLocal(ts){
   if (isNaN(d)) return null;
   const hh = d.getHours(), mm = d.getMinutes();
   const mins = hh*60 + mm;
+  // Define Day = 07:00–18:59 local; Night = otherwise
   if (mins >= 7*60 && mins <= 18*60+59) return "Day";
   return "Night";
-}
-/* ====== Helper: classify shift safely by local hour ====== */
-function classifyShiftSafe(ts){
-  if (!ts) return null;
-  const d = new Date(String(ts).trim());
-  if (isNaN(d)) return null;
-  const h = d.getHours(), m = d.getMinutes();
-  const mins = h * 60 + m;
-  return (mins >= 7*60 && mins <= 18*60+59) ? "Day" : "Night";
 }
 
 // ================== PROCESS ==================
@@ -262,6 +251,22 @@ async function processAll(){
     }
     chipCorners.textContent = cornerCodes.join(" ");
     chipCornerSource.textContent = cornerSource==="derived" ? "(derived)" : "";
+
+    // ---- helper: apply the same UI filters that shaped roster ----
+    const passesUIFilters = (row) => {
+      if (!row) return false;
+      if (cornerCodes && cornerCodes.length){
+        const c = (row.corner || "").slice(0,2).toUpperCase(); // LEFT(...,2)
+        const ok = cornerCodes.some(cc => c === cc.slice(0,2).toUpperCase());
+        if (!ok) return false;
+      }
+      if (newHireEl.checked && row.start instanceof Date){
+        const d0 = new Date(isoDate+"T00:00:00");
+        const days = Math.floor((d0 - row.start)/(1000*60*60*24));
+        if (days < 3) return false;
+      }
+      return true;
+    };
 
     // MyTime on-prem map
     const m0 = mytimeRaw[0] || {};
@@ -298,7 +303,8 @@ async function processAll(){
       const area = String((R_AREA? r[R_AREA] : "")??"").trim();
       const typ = classifyEmpType(r[R_TYPE]);
       const sp  = String((R_SP? r[R_SP] : "")??"");
-      const corner = R_COR ? String(r[R_COR]??"").trim() : first2(sp);
+      const cornerFull = R_COR ? String(r[R_COR]??"").trim() : sp;
+      const corner = first2(cornerFull); // LEFT(Corner,2)
       const met = firstAndThird(sp);
       const start = R_HIRE ? parseDateLoose(r[R_HIRE]) : null;
       const onp = onPrem.get(id)===true;
@@ -306,15 +312,18 @@ async function processAll(){
       return { id, deptId, area, typ, corner, met, start, onp, login };
     });
 
-    const fullById = new Map(rosterFullRows.map(x=>[x.id,x]));
+    const fullById = new Map(rosterFullRows.map(x=>[x.id,x])); // used by VET/VTO
     const loginToEid = new Map(rosterFullRows
       .filter(x=>x.login && x.id)
       .map(x=>[x.login, x.id]));
 
     // Apply UI filters to get working roster slice for dashboard
     let roster = rosterFullRows.slice();
-
-    if (cornerCodes.length) roster = roster.filter(x=>cornerCodes.some(cc => (x.corner||"").slice(0,2).toUpperCase() === cc.slice(0,2).toUpperCase()));
+    if (cornerCodes.length) {
+      roster = roster.filter(x =>
+        cornerCodes.some(cc => (x.corner||"").slice(0,2).toUpperCase() === cc.slice(0,2).toUpperCase())
+      );
+    }
 
     if (newHireEl.checked){
       const d0 = new Date(isoDate+"T00:00:00");
@@ -339,7 +348,7 @@ async function processAll(){
       if (cfg.Inbound.dept_ids.includes(dept)) return "Inbound";
       return "Other";
     };
-    const mkRow = () => Object.fromEntries(depts.map(d=>[d,{AMZN:0,TEMP:0,TOTAL:0}]));
+    const mkRow = () => Object.fromEntries(depts.map(d=>[d,{AMZN:0,TEMP:0,TOTAL:0}])); // simple 2-bucket counts
     const pushCount = (ACC, row)=>{
       const b=bucketOf(row); if (!depts.includes(b)) return;
       if (row.typ==="AMZN"){ACC[b].AMZN++; ACC[b].TOTAL++;}
@@ -366,9 +375,18 @@ async function processAll(){
       }
     }
 
+    /* ====== Helper: classify shift safely by local hour ====== */
+    function classifyShiftSafe(ts){
+      if (!ts) return null;
+      const d = new Date(String(ts).trim());
+      if (isNaN(d)) return null;
+      const h = d.getHours(), m = d.getMinutes();
+      const mins = h * 60 + m;
+      return (mins >= 7*60 && mins <= 18*60+59) ? "Day" : "Night";
+    }
+
     /* ====== PostingAcceptance: VET/VTO (date + shift safe) ====== */
     let vetSet = new Set(), vtoSet = new Set();
-
     if (vetRaw && vetRaw.length) {
       const a0 = vetRaw[0];
       const A_CLASS = findKey(a0, ["_class","class"]);
@@ -403,6 +421,7 @@ async function processAll(){
 
       const wantDate  = dateEl.value;
       const wantShift = shiftEl.value;
+
       const firstLevel = new Set();
       const perType = { VET: new Set(), VTO: new Set() };
 
@@ -450,69 +469,46 @@ async function processAll(){
       vtoSet = normalizeSet(vtoRawSet);
     }
 
-    // ====== Swaps (robust Day/Night + status parsing) ======
-    const collectSwaps = (rows, mapping) => {
-      const out = [], inn = [];
-      if (!rows.length) return { out, inn };
+    // ====== Swaps (now split by Shift Type Day/Night) ======
+    const collectSwaps=(rows,mapping)=>{
+      const out=[], inn=[];
+      if (!rows.length) return {out,inn};
+      const s0=rows[0];
 
-      const s0     = rows[0];
-      const S_ID   = findKey(s0, mapping.id || DEFAULT_SETTINGS.swap_mapping.id);
-      const S_ST   = findKey(s0, mapping.status || DEFAULT_SETTINGS.swap_mapping.status);
-      const S_SKIP = findKey(s0, mapping.skip_date || DEFAULT_SETTINGS.swap_mapping.skip_date);
-      const S_WORK = findKey(s0, mapping.work_date || DEFAULT_SETTINGS.swap_mapping.work_date);
-      const S_SHIFT= findKey(s0, ["Shift Type","Shift","Shift Name","ShiftTime"]);
+      const S_ID    = findKey(s0, mapping.id || DEFAULT_SETTINGS.swap_mapping.id);
+      const S_ST    = findKey(s0, mapping.status || DEFAULT_SETTINGS.swap_mapping.status);
+      const S_SKIP  = findKey(s0, mapping.skip_date || DEFAULT_SETTINGS.swap_mapping.skip_date);
+      const S_WORK  = findKey(s0, mapping.work_date || DEFAULT_SETTINGS.swap_mapping.work_date);
+      const S_SHIFT = findKey(s0, ["Shift Type","Shift","Shift Name","ShiftTime"]); // <-- NEW
 
-      const wantDate  = dateEl.value;                 // yyyy-mm-dd
-      const wantShift = shiftEl.value;                // "Day" | "Night"
-      const wantRe    = wantShift === "Day" ? /^DAY/i : /^NIGHT/i;
+      const APPROVED = (mapping.approved_statuses || DEFAULT_SETTINGS.swap_mapping.approved_statuses)
+        .map(s=>String(s).toUpperCase());
 
-      const APPROVED = new Set(
-        (mapping.approved_statuses || DEFAULT_SETTINGS.swap_mapping.approved_statuses)
-          .concat(["Auto Approved","Auto-Approved","Auto Closed","Auto-Closed","Closed"])
-          .map(s => String(s).toUpperCase())
-      );
+      const wantShift = shiftEl.value === "Night" ? /^NIGHT/i : /^DAY/i; // accept "DAY Shift", etc.
 
-      let seen=0, kept=0, shiftMismatch=0, notApproved=0, dateMiss=0;
+      for (const r of rows){
+        const id = normalizeId(r[S_ID]); if (!id) continue;
 
-      for (const r of rows) {
-        seen++;
+        const st = String(r[S_ST] ?? "Approved").toUpperCase();
+        const ok = !S_ST || APPROVED.includes(st) || /APPROVED|COMPLETED|ACCEPTED/.test(st);
+        if (!ok) continue;
 
-        const id = normalizeId(r[S_ID]); 
-        if (!id) continue;
+        // Shift Type filter
+        const sv = S_SHIFT ? String(r[S_SHIFT]).trim() : "";
+        if (S_SHIFT && sv && !wantShift.test(sv)) continue;
 
-        // date match (either side can qualify)
         const skipISO = toISODate(r[S_SKIP]);
         const workISO = toISODate(r[S_WORK]);
-        const inDate  = (skipISO === wantDate) || (workISO === wantDate);
-        if (!inDate) { dateMiss++; continue; }
 
-        // status check
-        const stRaw = S_ST ? String(r[S_ST]).trim() : "";
-        const st    = stRaw.toUpperCase();
-        const ok    = !S_ST || APPROVED.has(st) || /APPROVED|COMPLETED|ACCEPTED/i.test(stRaw);
-        if (!ok) { notApproved++; continue; }
-
-        // shift check (e.g., "DAY Shift", "Night shift")
-        const svRaw = S_SHIFT ? String(r[S_SHIFT]).trim() : "";
-        const svUp  = svRaw.toUpperCase();
-        const shiftOK = !S_SHIFT || wantRe.test(svUp);
-        if (!shiftOK) { shiftMismatch++; continue; }
-
-        if (skipISO === wantDate) out.push(id);
-        if (workISO === wantDate) inn.push(id);
-        kept++;
+        if (skipISO===isoDate) out.push(id);
+        if (workISO===isoDate) inn.push(id);
       }
-
-      if (kept === 0 && seen > 0) {
-        console.warn(`[Swaps] Seen=${seen} kept=0 | dateMiss=${dateMiss} notApproved=${notApproved} shiftMismatch=${shiftMismatch}`);
-      }
-      return { out, inn };
+      return {out,inn};
     };
 
     const mapping = SETTINGS.swap_mapping || DEFAULT_SETTINGS.swap_mapping;
     const S1 = collectSwaps(swapOutRaw, mapping);
     const S2 = collectSwaps(swapInRaw,  mapping);
-
     const swapOutSet = new Set([...S1.out, ...S2.out]);
     const swapInSet  = new Set([...S1.inn, ...S2.inn]);
 
@@ -527,20 +523,10 @@ async function processAll(){
     const cohortExpected = roster.filter(x=>!excluded.has(x.id));
     const cohortPresentExSwaps = cohortExpected.filter(x=>x.onp);
 
-    // expose for download button
-    COHORT_EXPECTED_ROWS = cohortExpected.slice();
-
     // rows for display
     const swapOutRows        = [...swapOutSet].map(id=>byId.get(id)).filter(Boolean);
-
-    // Swap-In may originate from other corners; restrict to active corner set so Day/Night boards don't mix
-    const inAll = [...swapInSet].map(id => fullById.get(id)).filter(Boolean);
-    const swapInExpectedRows = inAll.filter(x =>
-      cornerCodes.length === 0
-        ? true
-        : cornerCodes.some(cc => (x.corner||"").slice(0,2).toUpperCase() === cc.slice(0,2).toUpperCase())
-    );
-    const swapInPresentRows  = swapInExpectedRows.filter(x => onPrem.get(x.id) === true);
+    const swapInExpectedRows = [...swapInSet].map(id=>fullById.get(id)).filter(Boolean);
+    const swapInPresentRows  = swapInExpectedRows.filter(x=>onPrem.get(x.id)===true);
 
     const vetExpectedRows = [...vetSet].map(id=>byId.get(id)||fullById.get(id)).filter(Boolean);
     const vetPresentRows  = vetExpectedRows.filter(x=>onPrem.get(x.id)===true);
@@ -598,17 +584,10 @@ async function processAll(){
     chipBH.href = buildURL(bhRows.length?bhRows:[{id:"",dept_bucket:"",emp_type:"",corner:"",date:isoDate,reason:"Banked Holiday"}]);
 
     // ---------- No-Show CSV ----------
-    const makeNoShows = () =>
-      COHORT_EXPECTED_ROWS.filter(x => !x.onp).map(x => ({
-        id:x.id, dept_bucket:bucketOf(x), emp_type:x.typ, corner:x.corner, date:isoDate, reason:"No-Show"
-      }));
-
-    btnNoShow.onclick = ()=> {
-      const noShows = makeNoShows();
-      downloadCSV(`no_shows_${isoDate}.csv`,
-        noShows.length ? noShows : [{id:"",dept_bucket:"",emp_type:"",corner:"",date:isoDate,reason:"No-Show"}]
-      );
-    };
+    const noShows = cohortExpected.filter(x=>!x.onp).map(x=>({
+      id:x.id, dept_bucket:bucketOf(x), emp_type:x.typ, corner:x.corner, date:isoDate, reason:"No-Show"
+    }));
+    btnNoShow.onclick = ()=> downloadCSV(`no_shows_${isoDate}.csv`, noShows.length?noShows:[{id:"",dept_bucket:"",emp_type:"",corner:"",date:isoDate,reason:"No-Show"}]);
 
     // ================= AUDIT TABLE =================
     // Priority: Vacation > BH > VTO > Swap-Out > VET-not-shown > No-Show
@@ -623,7 +602,7 @@ async function processAll(){
     for (const x of vetExpectedRows){
       if (onPrem.get(x.id)!==true && !reasonOf.has(x.id)) reasonOf.set(x.id, "VET accepted but not shown");
     }
-    for (const x of COHORT_EXPECTED_ROWS){
+    for (const x of cohortExpected){
       if (x.onp!==true && !reasonOf.has(x.id)) reasonOf.set(x.id, "No-Show (plain)");
     }
 
