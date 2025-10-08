@@ -1,6 +1,7 @@
 // === Branding ===
 const APP_NAME = "PXT Pheonix";
 document.title = `${APP_NAME} — Attendance Dashboard`;
+
 // ================= CONFIG / LOAD SETTINGS =================
 const SETTINGS_URL = new URL("settings.json", document.baseURI).href + "?v=" + Date.now();
 const DEFAULT_SETTINGS = {
@@ -220,6 +221,16 @@ function classifyShiftLocal(ts){
   if (mins >= 7*60 && mins <= 18*60+59) return "Day";
   return "Night";
 }
+/* ====== Helper: classify shift safely by local hour ====== */
+function classifyShiftSafe(ts, isoDate){
+  if (!ts) return null;
+  const d = new Date(String(ts).trim());
+  if (isNaN(d)) return null;
+  const h = d.getHours(), m = d.getMinutes();
+  const mins = h * 60 + m;
+  return (mins >= 7*60 && mins <= 18*60+59) ? "Day" : "Night";
+}
+
 // ================== PROCESS ==================
 async function processAll(){
   fileStatus.textContent = "Parsing…";
@@ -342,7 +353,7 @@ async function processAll(){
       if (cfg.Inbound.dept_ids.includes(dept)) return "Inbound";
       return "Other";
     };
-    const mkRow = () => Object.fromEntries(depts.map(d=>[d,{AMZN:0,TEMP:0,TOTAL:0}])); // simple 2-bucket counts
+    const mkRow = () => Object.fromEntries(depts.map(d=>[d,{AMZN:0,TEMP:0,TOTAL:0}]));
     const pushCount = (ACC, row)=>{
       const b=bucketOf(row); if (!depts.includes(b)) return;
       if (row.typ==="AMZN"){ACC[b].AMZN++; ACC[b].TOTAL++;}
@@ -368,102 +379,93 @@ async function processAll(){
         else if (hrs >= 10 && /(vac|pto)/.test(code)) vacSet.add(id);
       }
     }
-/* ====== Helper: classify shift safely by local hour ====== */
-function classifyShiftSafe(ts, isoDate){
-  if (!ts) return null;
-  const d = new Date(String(ts).trim());
-  if (isNaN(d)) return null;
-  const h = d.getHours(), m = d.getMinutes();
-  const mins = h * 60 + m;
-  // 07:00–18:59 → Day; 19:00–06:59 → Night
-  return (mins >= 7*60 && mins <= 18*60+59) ? "Day" : "Night";
-}
 
-/* ====== PostingAcceptance: VET/VTO (date + shift safe) ====== */
-let vetSet = new Set(), vtoSet = new Set();
+    /* ====== PostingAcceptance: VET/VTO (date + shift safe) ====== */
+    let vetSet = new Set(), vtoSet = new Set();
 
-if (vetRaw && vetRaw.length) {
-  const a0 = vetRaw[0];
-  const A_CLASS = findKey(a0, ["_class","class"]);
-  const A_ID    = findKey(a0, ["employeeId","Employee ID","Person ID","Person Number","EID"]);
-  const A_LOGIN = findKey(a0, ["employeeLogin","Employee Login","login","user","username"]);
-  const A_TYP   = findKey(a0, ["opportunity.type","Opportunity Type","Type"]);
-  const A_ACC   = findKey(a0, ["opportunity.acceptedCount","Accepted Count","acceptedCount"]);
-  const A_FLAG  = findKey(a0, ["isAccepted","employeeAccepted","isManual"]);
-  const A_STAT  = findKey(a0, ["status","opportunity.status"]);
-  const A_S1    = findKey(a0, ["opportunity.shiftStart","shiftStart","start"]);
-  const A_T1    = findKey(a0, ["acceptanceTime","acceptedAt","createdAt"]);
-  const A_OPID  = findKey(a0, ["opportunity.id","opportunityId","Opportunity Id","id"]);
+    if (vetRaw && vetRaw.length) {
+      const a0 = vetRaw[0];
+      const A_CLASS = findKey(a0, ["_class","class"]);
+      const A_ID    = findKey(a0, ["employeeId","Employee ID","Person ID","Person Number","EID"]);
+      const A_LOGIN = findKey(a0, ["employeeLogin","Employee Login","login","user","username"]);
+      const A_TYP   = findKey(a0, ["opportunity.type","Opportunity Type","Type"]);
+      const A_ACC   = findKey(a0, ["opportunity.acceptedCount","Accepted Count","acceptedCount"]);
+      const A_FLAG  = findKey(a0, ["isAccepted","employeeAccepted","isManual"]);
+      const A_STAT  = findKey(a0, ["status","opportunity.status"]);
+      const A_S1    = findKey(a0, ["opportunity.shiftStart","shiftStart","start"]);
+      const A_T1    = findKey(a0, ["acceptanceTime","acceptedAt","createdAt"]);
+      const A_OPID  = findKey(a0, ["opportunity.id","opportunityId","Opportunity Id","id"]);
 
-  const dateFromTs = v => {
-    const m = String(v||"").match(/^(\d{4}-\d{2}-\d{2})/);
-    return m ? m[1] : null;
-  };
-  const typeClass = raw => {
-    const t = String(raw||"").toLowerCase();
-    if (t.includes("vto")) return "VTO";
-    if (t.includes("vet") || t.includes("overtime")) return "VET";
-    return null;
-  };
-  const wasAccepted = r => {
-    const cnt  = A_ACC  ? Number(r[A_ACC]) : NaN;
-    const flag = A_FLAG ? String(r[A_FLAG]).trim().toLowerCase() : "";
-    const stat = A_STAT ? String(r[A_STAT]).trim().toUpperCase() : "";
-    return (Number.isFinite(cnt) && cnt > 0)
-        || ["true","1","yes"].includes(flag)
-        || ["ACCEPTED","APPROVED","COMPLETED"].includes(stat);
-  };
+      const dateFromTs = v => {
+        const m = String(v||"").match(/^(\d{4}-\d{2}-\d{2})/);
+        return m ? m[1] : null;
+      };
+      const typeClass = raw => {
+        const t = String(raw||"").toLowerCase();
+        if (t.includes("vto")) return "VTO";
+        if (t.includes("vet") || t.includes("overtime")) return "VET";
+        return null;
+      };
+      const wasAccepted = r => {
+        const cnt  = A_ACC  ? Number(r[A_ACC]) : NaN;
+        const flag = A_FLAG ? String(r[A_FLAG]).trim().toLowerCase() : "";
+        const stat = A_STAT ? String(r[A_STAT]).trim().toUpperCase() : "";
+        return (Number.isFinite(cnt) && cnt > 0)
+            || ["true","1","yes"].includes(flag)
+            || ["ACCEPTED","APPROVED","COMPLETED"].includes(stat);
+      };
 
-  const wantDate  = dateEl.value;
-  const wantShift = shiftEl.value;
-  const firstLevel = new Set();
-  const perType = { VET: new Set(), VTO: new Set() };
+      const wantDate  = dateEl.value;
+      const wantShift = shiftEl.value;
+      const firstLevel = new Set();
+      const perType = { VET: new Set(), VTO: new Set() };
 
-  for (const r of vetRaw) {
-    if (A_CLASS) {
-      const cls = String(r[A_CLASS]||"");
-      if (!/AcceptancePostingAcceptanceRecord/i.test(cls)) continue;
+      for (const r of vetRaw) {
+        if (A_CLASS) {
+          const cls = String(r[A_CLASS]||"");
+          if (!/AcceptancePostingAcceptanceRecord/i.test(cls)) continue;
+        }
+
+        let empId = A_ID ? normalizeId(r[A_ID]) : "";
+        if (!empId && A_LOGIN) {
+          const lg = normLogin(r[A_LOGIN]);
+          empId = loginToEid.get(lg) || "";
+        }
+        if (!empId) continue;
+
+        if (!wasAccepted(r)) continue;
+
+        const dISO = dateFromTs(r[A_S1]) || dateFromTs(r[A_T1]);
+        if (dISO !== wantDate) continue;
+
+        const tClass = typeClass(r[A_TYP]);
+        if (!tClass) continue;
+
+        const sType = classifyShiftSafe(r[A_S1] || r[A_T1], wantDate);
+        if (sType && sType !== wantShift) continue;
+
+        if (!fullById.has(empId)) continue;
+
+        const oppId = A_OPID ? (r[A_OPID] || "") : "";
+        const k1 = `${empId}|${dISO}|${tClass}|${oppId}`;
+        if (firstLevel.has(k1)) continue;
+        firstLevel.add(k1);
+        perType[tClass].add(`${empId}|${dISO}|${tClass}`);
+      }
+
+      const pairsVTO = new Set([...perType.VTO].map(k => k.split("|")[0]));
+      const pairsVET = new Set([...perType.VET].map(k => k.split("|")[0]));
+      const vetRawSet = new Set();
+      const vtoRawSet = new Set();
+      for (const id of pairsVTO) vtoRawSet.add(id);
+      for (const id of pairsVET) if (!pairsVTO.has(id)) vetRawSet.add(id);
+
+      vetSet = normalizeSet(vetRawSet);
+      vtoSet = normalizeSet(vtoRawSet);
     }
 
-    let empId = A_ID ? normalizeId(r[A_ID]) : "";
-    if (!empId && A_LOGIN) {
-      const lg = normLogin(r[A_LOGIN]);
-      empId = loginToEid.get(lg) || "";
-    }
-    if (!empId) continue;
-
-    if (!wasAccepted(r)) continue;
-
-    const dISO = dateFromTs(r[A_S1]) || dateFromTs(r[A_T1]);
-    if (dISO !== wantDate) continue;
-
-    const tClass = typeClass(r[A_TYP]);
-    if (!tClass) continue;
-
-    const sType = classifyShiftSafe(r[A_S1] || r[A_T1], wantDate);
-    if (sType && sType !== wantShift) continue;
-
-    if (!fullById.has(empId)) continue;
-
-    const oppId = A_OPID ? (r[A_OPID] || "") : "";
-    const k1 = `${empId}|${dISO}|${tClass}|${oppId}`;
-    if (firstLevel.has(k1)) continue;
-    firstLevel.add(k1);
-    perType[tClass].add(`${empId}|${dISO}|${tClass}`);
-  }
-
-  const pairsVTO = new Set([...perType.VTO].map(k => k.split("|")[0]));
-  const pairsVET = new Set([...perType.VET].map(k => k.split("|")[0]));
-  const vetRawSet = new Set();
-  const vtoRawSet = new Set();
-  for (const id of pairsVTO) vtoRawSet.add(id);
-  for (const id of pairsVET) if (!pairsVTO.has(id)) vetRawSet.add(id);
-
-  vetSet = normalizeSet(vetRawSet);
-  vtoSet = normalizeSet(vtoRawSet);
-}
-    // ====== Swaps ======
-    const collectSwaps=(rows,mapping)=>{
+    // ====== Swaps (with Shift Type filter: Day/Night) ======
+    const collectSwaps = (rows, mapping)=>{
       const out=[], inn=[];
       if (!rows.length) return {out,inn};
       const s0=rows[0];
@@ -471,19 +473,28 @@ if (vetRaw && vetRaw.length) {
       const S_ST   = findKey(s0, mapping.status || DEFAULT_SETTINGS.swap_mapping.status);
       const S_SKIP = findKey(s0, mapping.skip_date || DEFAULT_SETTINGS.swap_mapping.skip_date);
       const S_WORK = findKey(s0, mapping.work_date || DEFAULT_SETTINGS.swap_mapping.work_date);
+      const S_SHIFT= findKey(s0, ["Shift Type","Shift","Shift Name","ShiftTime"]);
       const APPROVED = (mapping.approved_statuses || DEFAULT_SETTINGS.swap_mapping.approved_statuses).map(s=>String(s).toUpperCase());
+      const wantShift = shiftEl.value.toUpperCase(); // "DAY" or "NIGHT"
+
       for (const r of rows){
         const id = normalizeId(r[S_ID]); if (!id) continue;
         const st = String(r[S_ST] ?? "Approved").toUpperCase();
         const ok = !S_ST || APPROVED.includes(st) || /APPROVED|COMPLETED|ACCEPTED/.test(st);
         const skipISO = toISODate(r[S_SKIP]);
         const workISO = toISODate(r[S_WORK]);
+        const shiftVal = S_SHIFT ? String(r[S_SHIFT]).toUpperCase() : "";
+
+        // Only count rows matching current Day/Night
+        if (shiftVal && !shiftVal.includes(wantShift)) continue;
         if (!ok) continue;
+
         if (skipISO===isoDate) out.push(id);
         if (workISO===isoDate) inn.push(id);
       }
       return {out,inn};
     };
+
     const mapping = SETTINGS.swap_mapping || DEFAULT_SETTINGS.swap_mapping;
     const S1 = collectSwaps(swapOutRaw, mapping);
     const S2 = collectSwaps(swapInRaw,  mapping);
@@ -503,8 +514,15 @@ if (vetRaw && vetRaw.length) {
 
     // rows for display
     const swapOutRows        = [...swapOutSet].map(id=>byId.get(id)).filter(Boolean);
-    const swapInExpectedRows = [...swapInSet].map(id=>fullById.get(id)).filter(Boolean);
-    const swapInPresentRows  = swapInExpectedRows.filter(x=>onPrem.get(x.id)===true);
+
+    // Swap-In: start from full (could be from other corners), then restrict to active corner set to avoid mixing boards
+    const inAll = [...swapInSet].map(id => fullById.get(id)).filter(Boolean);
+    const swapInExpectedRows = inAll.filter(x =>
+      cornerCodes.length === 0
+        ? true
+        : cornerCodes.some(cc => (x.corner||"").slice(0,2).toUpperCase() === cc.slice(0,2).toUpperCase())
+    );
+    const swapInPresentRows  = swapInExpectedRows.filter(x => onPrem.get(x.id) === true);
 
     const vetExpectedRows = [...vetSet].map(id=>byId.get(id)||fullById.get(id)).filter(Boolean);
     const vetPresentRows  = vetExpectedRows.filter(x=>onPrem.get(x.id)===true);
