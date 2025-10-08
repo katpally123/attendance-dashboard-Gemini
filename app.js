@@ -130,7 +130,9 @@ function hoursToNumber(h){
   if (/^\d+(\.\d+)?$/.test(s)) return parseFloat(s);
   const m = /^(\d{1,2}):(\d{2})$/.exec(s);
   if (m){ const hh=+m[1], mm=+m[2]; return hh + (mm/60); }
-  return parseFloat(s)||0;
+  // tolerate comma decimals
+  const cleaned = s.replace(/,/g,'.').replace(/[^\d.]/g,'');
+  return parseFloat(cleaned)||0;
 }
 function findKey(row, candidates){
   const keys = Object.keys(row||{});
@@ -232,7 +234,8 @@ async function processAll(){
     const [rosterRaw, mytimeRaw, vacRaw, swapOutRaw, swapInRaw, vetRaw] = await Promise.all([
       parseCSVFile(rosterEl.files[0], {header:true}),
       parseCSVFile(mytimeEl.files[0], {header:true, skipFirstLine:true}),
-      vacEl.files[0]     ? parseCSVFile(vacEl.files[0], {header:true})     : Promise.resolve([]),
+      // IMPORTANT: skip banner row in Hours Summary
+      vacEl.files[0]     ? parseCSVFile(vacEl.files[0], {header:true, skipFirstLine:true}) : Promise.resolve([]),
       swapOutEl.files[0] ? parseCSVFile(swapOutEl.files[0], {header:true}) : Promise.resolve([]),
       swapInEl.files[0]  ? parseCSVFile(swapInEl.files[0],  {header:true}) : Promise.resolve([]),
       vetEl.files[0]     ? parseCSVFile(vetEl.files[0],     {header:true}) : Promise.resolve([]),
@@ -356,22 +359,37 @@ async function processAll(){
     };
     const sumTotals = ACC => depts.reduce((s,d)=>s+ACC[d].TOTAL,0);
 
-    // ====== Hours Summary: Vacation (>=10h) & Banked Holiday (>=12h) ======
+    // ====== Hours Summary: Vacation (>=9.5h) & Banked Holiday (>=11.9h) ======
     const vacSet = new Set();
     const bhSet  = new Set();
+
     if (vacRaw.length){
-      const v0 = vacRaw[0];
+      const v0   = vacRaw[0] || {};
       const V_ID = findKey(v0, ["Employee ID","Person ID","Person Number","Badge ID","ID"]);
-      const V_DT = findKey(v0, ["Date","Worked Date","Shift Date","Business Date"]);
-      const V_PC = findKey(v0, ["Pay Code","PayCode","Earning Code","Absence Name","Absence Type"]);
-      const V_HR = findKey(v0, ["Hours","Total Hours"]);
+      const V_DT = findKey(v0, ["Date","Worked Date","Shift Date","Business Date","Shift Start Date"]);
+      const V_PC = findKey(v0, ["Pay Code","PayCode","Earning Code"]);
+      const V_AB = findKey(v0, ["Absence Name","Absence Type","Time Off Type","Time-Off Type","Category"]);
+      const V_HR = findKey(v0, ["Hours","Total Hours","Duration","Qty","Quantity","Scheduled Hours"]);
+
+      const getLabel = (row) => String(row[V_PC ?? V_AB] ?? row[V_AB ?? V_PC] ?? "").toLowerCase();
+
       for (const r of vacRaw){
-        const id = normalizeId(r[V_ID]); if (!id) continue;
-        if (toISODate(r[V_DT]) !== isoDate) continue;
-        const code = String(r[V_PC]||"").toLowerCase();
-        const hrs  = hoursToNumber(r[V_HR]);
-        if (hrs >= 12 && /(banked|holiday\s*bank|banked-?holiday|bh\b)/.test(code)) bhSet.add(id);
-        else if (hrs >= 10 && /(vac|pto)/.test(code)) vacSet.add(id);
+        const id  = normalizeId(V_ID ? r[V_ID] : null);
+        if (!id) continue;
+
+        if (V_DT){
+          const dISO = toISODate(r[V_DT]);
+          if (dISO !== isoDate) continue;
+        }
+
+        const label = getLabel(r);
+        const hrs   = hoursToNumber(V_HR ? r[V_HR] : null);
+
+        if (/(banked|holiday\s*bank|banked-?holiday|\bbh\b)/.test(label) && hrs >= 11.9){
+          bhSet.add(id);
+        } else if (/(vac|pto|annual|paid\s*time\s*off)/.test(label) && hrs >= 9.5){
+          vacSet.add(id);
+        }
       }
     }
 
@@ -413,7 +431,7 @@ async function processAll(){
       const wasAccepted = r => {
         const cnt  = A_ACC  ? Number(r[A_ACC]) : NaN;
         const flag = A_FLAG ? String(r[A_FLAG]).trim().toLowerCase() : "";
-        const stat = A_STAT ? String(r[A_STAT]).trim().toUpperCase() : "";
+               const stat = A_STAT ? String(r[A_STAT]).trim().toUpperCase() : "";
         return (Number.isFinite(cnt) && cnt > 0)
             || ["true","1","yes"].includes(flag)
             || ["ACCEPTED","APPROVED","COMPLETED"].includes(stat);
