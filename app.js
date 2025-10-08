@@ -464,68 +464,85 @@ async function processAll(){
       vtoSet = normalizeSet(vtoRawSet);
     }
 
-    // ====== Swaps (with Shift Type filter: Day/Night) ======
-    const collectSwaps = (rows, mapping)=>{
-      const out=[], inn=[];
-      if (!rows.length) return {out,inn};
-      const s0=rows[0];
-      const S_ID   = findKey(s0, mapping.id || DEFAULT_SETTINGS.swap_mapping.id);
-      const S_ST   = findKey(s0, mapping.status || DEFAULT_SETTINGS.swap_mapping.status);
-      const S_SKIP = findKey(s0, mapping.skip_date || DEFAULT_SETTINGS.swap_mapping.skip_date);
-      const S_WORK = findKey(s0, mapping.work_date || DEFAULT_SETTINGS.swap_mapping.work_date);
-      const S_SHIFT= findKey(s0, ["Shift Type","Shift","Shift Name","ShiftTime"]);
-      const APPROVED = (mapping.approved_statuses || DEFAULT_SETTINGS.swap_mapping.approved_statuses).map(s=>String(s).toUpperCase());
-      const wantShift = shiftEl.value.toUpperCase(); // "DAY" or "NIGHT"
+ // ====== Swaps (robust Day/Night + status parsing) ======
+const collectSwaps = (rows, mapping) => {
+  const out = [], inn = [];
+  if (!rows.length) return { out, inn };
 
-      for (const r of rows){
-        const id = normalizeId(r[S_ID]); if (!id) continue;
-        const st = String(r[S_ST] ?? "Approved").toUpperCase();
-        const ok = !S_ST || APPROVED.includes(st) || /APPROVED|COMPLETED|ACCEPTED/.test(st);
-        const skipISO = toISODate(r[S_SKIP]);
-        const workISO = toISODate(r[S_WORK]);
-        const shiftVal = S_SHIFT ? String(r[S_SHIFT]).toUpperCase() : "";
+  const s0     = rows[0];
+  const S_ID   = findKey(s0, mapping.id || DEFAULT_SETTINGS.swap_mapping.id);
+  const S_ST   = findKey(s0, mapping.status || DEFAULT_SETTINGS.swap_mapping.status);
+  const S_SKIP = findKey(s0, mapping.skip_date || DEFAULT_SETTINGS.swap_mapping.skip_date);
+  const S_WORK = findKey(s0, mapping.work_date || DEFAULT_SETTINGS.swap_mapping.work_date);
+  const S_SHIFT= findKey(s0, ["Shift Type","Shift","Shift Name","ShiftTime"]);
 
-        // Only count rows matching current Day/Night
-        if (shiftVal && !shiftVal.includes(wantShift)) continue;
-        if (!ok) continue;
+  const wantDate  = dateEl.value;                 // yyyy-mm-dd
+  const wantShift = shiftEl.value;                // "Day" | "Night"
+  const wantRe    = wantShift === "Day" ? /^DAY/i : /^NIGHT/i;
 
-        if (skipISO===isoDate) out.push(id);
-        if (workISO===isoDate) inn.push(id);
-      }
-      return {out,inn};
-    };
+  // broaden the acceptance signals a bit
+  const APPROVED = new Set(
+    (mapping.approved_statuses || DEFAULT_SETTINGS.swap_mapping.approved_statuses)
+      .concat(["Auto Approved","Auto-Approved","Auto Closed","Auto-Closed","Closed"])
+      .map(s => String(s).toUpperCase())
+  );
 
-    const mapping = SETTINGS.swap_mapping || DEFAULT_SETTINGS.swap_mapping;
-    const S1 = collectSwaps(swapOutRaw, mapping);
-    const S2 = collectSwaps(swapInRaw,  mapping);
-    const swapOutSet = new Set([...S1.out, ...S2.out]);
-    const swapInSet  = new Set([...S1.inn, ...S2.inn]);
+  let seen=0, kept=0, shiftMismatch=0, notApproved=0, dateMiss=0;
 
-    // ====== Build cohorts ======
-    // Exclusions from "expected": Vacation > BH > VTO > Swap-Out
-    const excluded = new Set();
-    for (const id of vacSet) if (byId.has(id)) excluded.add(id);
-    for (const id of bhSet)  if (byId.has(id) && !excluded.has(id)) excluded.add(id);
-    for (const id of vtoSet) if (byId.has(id) && !excluded.has(id)) excluded.add(id);
-    for (const id of swapOutSet) if (byId.has(id) && !excluded.has(id)) excluded.add(id);
+  for (const r of rows) {
+    seen++;
 
-    const cohortExpected = roster.filter(x=>!excluded.has(x.id));
-    const cohortPresentExSwaps = cohortExpected.filter(x=>x.onp);
+    const id = normalizeId(r[S_ID]); 
+    if (!id) continue;
 
-    // rows for display
-    const swapOutRows        = [...swapOutSet].map(id=>byId.get(id)).filter(Boolean);
+    // date match (either side can qualify)
+    const skipISO = toISODate(r[S_SKIP]);
+    const workISO = toISODate(r[S_WORK]);
+    const inDate  = (skipISO === wantDate) || (workISO === wantDate);
+    if (!inDate) { dateMiss++; continue; }
 
-    // Swap-In: start from full (could be from other corners), then restrict to active corner set to avoid mixing boards
-    const inAll = [...swapInSet].map(id => fullById.get(id)).filter(Boolean);
-    const swapInExpectedRows = inAll.filter(x =>
-      cornerCodes.length === 0
-        ? true
-        : cornerCodes.some(cc => (x.corner||"").slice(0,2).toUpperCase() === cc.slice(0,2).toUpperCase())
-    );
-    const swapInPresentRows  = swapInExpectedRows.filter(x => onPrem.get(x.id) === true);
+    // status check
+    const stRaw = S_ST ? String(r[S_ST]).trim() : "";
+    const st    = stRaw.toUpperCase();
+    const ok    = !S_ST || APPROVED.has(st) || /APPROVED|COMPLETED|ACCEPTED/i.test(stRaw);
+    if (!ok) { notApproved++; continue; }
 
-    const vetExpectedRows = [...vetSet].map(id=>byId.get(id)||fullById.get(id)).filter(Boolean);
-    const vetPresentRows  = vetExpectedRows.filter(x=>onPrem.get(x.id)===true);
+    // shift check (e.g., "DAY Shift", "Night shift")
+    const svRaw = S_SHIFT ? String(r[S_SHIFT]).trim() : "";
+    const svUp  = svRaw.toUpperCase();
+    const shiftOK = !S_SHIFT || wantRe.test(svUp);
+    if (!shiftOK) { shiftMismatch++; continue; }
+
+    // collect
+    if (skipISO === wantDate) out.push(id);
+    if (workISO === wantDate) inn.push(id);
+    kept++;
+  }
+
+  if (kept === 0 && seen > 0) {
+    console.warn(`[Swaps] Seen=${seen} kept=0 | dateMiss=${dateMiss} notApproved=${notApproved} shiftMismatch=${shiftMismatch}`);
+  }
+  return { out, inn };
+};
+
+const mapping = SETTINGS.swap_mapping || DEFAULT_SETTINGS.swap_mapping;
+const S1 = collectSwaps(swapOutRaw, mapping);
+const S2 = collectSwaps(swapInRaw,  mapping);
+
+// combine both files (either can contain both skip/work)
+const swapOutSet = new Set([...S1.out, ...S2.out]);
+const swapInSet  = new Set([...S1.inn, ...S2.inn]);
+
+// ----- Display rows (scope to the active corner set so Day/Night boards don't mix) -----
+const swapOutRows = [...swapOutSet].map(id => byId.get(id)).filter(Boolean);
+
+const inAll = [...swapInSet].map(id => fullById.get(id)).filter(Boolean);
+const swapInExpectedRows = inAll.filter(x =>
+  !cornerCodes.length
+    ? true
+    : cornerCodes.some(cc => (x.corner || "").slice(0,2).toUpperCase() === cc.slice(0,2).toUpperCase())
+);
+const swapInPresentRows  = swapInExpectedRows.filter(x => onPrem.get(x.id) === true);
 
     // ---------- Dashboard table ----------
     const row_RegularExpected   = mkRow(); cohortExpected.forEach(x=>pushCount(row_RegularExpected,x));
