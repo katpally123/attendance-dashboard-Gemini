@@ -130,7 +130,6 @@ function hoursToNumber(h){
   if (/^\d+(\.\d+)?$/.test(s)) return parseFloat(s);
   const m = /^(\d{1,2}):(\d{2})$/.exec(s);
   if (m){ const hh=+m[1], mm=+m[2]; return hh + (mm/60); }
-  // tolerate comma decimals
   const cleaned = s.replace(/,/g,'.').replace(/[^\d.]/g,'');
   return parseFloat(cleaned)||0;
 }
@@ -167,7 +166,6 @@ function classifyShift(ts){
 // Normalize a Set of IDs using normalizeId
 const normalizeSet = (s) => new Set([...s].map((id) => normalizeId(id)));
 
-// login normalizer + login->EID mapping
 const normLogin = (x) => {
   if (x == null) return "";
   let s = String(x).trim().toLowerCase();
@@ -219,7 +217,6 @@ function classifyShiftLocal(ts){
   if (isNaN(d)) return null;
   const hh = d.getHours(), mm = d.getMinutes();
   const mins = hh*60 + mm;
-  // Define Day = 07:00–18:59 local; Night = otherwise
   if (mins >= 7*60 && mins <= 18*60+59) return "Day";
   return "Night";
 }
@@ -233,8 +230,8 @@ async function processAll(){
     // read all files
     const [rosterRaw, mytimeRaw, vacRaw, swapOutRaw, swapInRaw, vetRaw] = await Promise.all([
       parseCSVFile(rosterEl.files[0], {header:true}),
-      parseCSVFile(mytimeEl.files[0], {header:true, skipFirstLine:true}),
-      // IMPORTANT: skip banner row in Hours Summary
+      parseCSVFile(mytimeEl.files[0], {header:true, skipFirstLine:true}), // MyTime header on row 2
+      // Hours Summary header on row 2 (skip banner line)
       vacEl.files[0]     ? parseCSVFile(vacEl.files[0], {header:true, skipFirstLine:true}) : Promise.resolve([]),
       swapOutEl.files[0] ? parseCSVFile(swapOutEl.files[0], {header:true}) : Promise.resolve([]),
       swapInEl.files[0]  ? parseCSVFile(swapInEl.files[0],  {header:true}) : Promise.resolve([]),
@@ -254,22 +251,6 @@ async function processAll(){
     }
     chipCorners.textContent = cornerCodes.join(" ");
     chipCornerSource.textContent = cornerSource==="derived" ? "(derived)" : "";
-
-    // ---- helper: apply the same UI filters that shaped roster ----
-    const passesUIFilters = (row) => {
-      if (!row) return false;
-      if (cornerCodes && cornerCodes.length){
-        const c = (row.corner || "").slice(0,2).toUpperCase(); // LEFT(...,2)
-        const ok = cornerCodes.some(cc => c === cc.slice(0,2).toUpperCase());
-        if (!ok) return false;
-      }
-      if (newHireEl.checked && row.start instanceof Date){
-        const d0 = new Date(isoDate+"T00:00:00");
-        const days = Math.floor((d0 - row.start)/(1000*60*60*24));
-        if (days < 3) return false;
-      }
-      return true;
-    };
 
     // MyTime on-prem map
     const m0 = mytimeRaw[0] || {};
@@ -315,7 +296,7 @@ async function processAll(){
       return { id, deptId, area, typ, corner, met, start, onp, login };
     });
 
-    const fullById = new Map(rosterFullRows.map(x=>[x.id,x])); // used by VET/VTO
+    const fullById = new Map(rosterFullRows.map(x=>[x.id,x]));
     const loginToEid = new Map(rosterFullRows
       .filter(x=>x.login && x.id)
       .map(x=>[x.login, x.id]));
@@ -337,7 +318,7 @@ async function processAll(){
       });
     }
 
-    const byId = new Map(roster.map(x=>[x.id,x])); // filtered
+    const byId = new Map(roster.map(x=>[x.id,x])); // filtered slice (current shift)
 
     // dept helpers
     const cfg = SETTINGS.departments;
@@ -360,68 +341,66 @@ async function processAll(){
     const sumTotals = ACC => depts.reduce((s,d)=>s+ACC[d].TOTAL,0);
 
     // ====== Hours Summary: Vacation (>=9.5h) & Banked Holiday (>=11.9h) ======
-const vacSet = new Set();
-const bhSet  = new Set();
+    const vacSet = new Set();
+    const bhSet  = new Set();
 
-if (vacRaw.length){
-  const v0   = vacRaw[0] || {};
-  const V_ID = findKey(v0, ["Employee ID","Person ID","Person Number","Badge ID","ID"]);
-  const V_DT = findKey(v0, ["Date","Worked Date","Shift Date","Business Date","Shift Start Date"]);
+    if (vacRaw.length){
+      const v0   = vacRaw[0] || {};
+      const V_ID = findKey(v0, ["Employee ID","Person ID","Person Number","Badge ID","ID"]);
+      const V_DT = findKey(v0, ["Date","Worked Date","Shift Date","Business Date","Shift Start Date"]);
 
-  // helper: nth key fallback by Excel column letter (0-based: A=0... Q=16, S=18)
-  const nthKey = (row, idx) => {
-    const ks = Object.keys(row||{});
-    return (idx >= 0 && idx < ks.length) ? ks[idx] : null;
-  };
+      // helper: nth key fallback by Excel column letter (0-based: A=0... Q=16, S=18)
+      const nthKey = (row, idx) => {
+        const ks = Object.keys(row||{});
+        return (idx >= 0 && idx < ks.length) ? ks[idx] : null;
+      };
 
-  // 1) Prefer explicit header names; 2) fallback to positions: Q=16, S=18
-  const V_BH  = Object.keys(v0).find(k => /(banked\s*holiday|\bbh\b)/i.test(k)) || nthKey(v0, 16);
-  const V_VAC = Object.keys(v0).find(k => /vacation/i.test(k))                     || nthKey(v0, 18);
+      // Prefer names; fallback to positions Q=16 (BH) and S=18 (Vacation)
+      const V_BH  = Object.keys(v0).find(k => /(banked\s*holiday|\bbh\b)/i.test(k)) || nthKey(v0, 16);
+      const V_VAC = Object.keys(v0).find(k => /vacation/i.test(k))                     || nthKey(v0, 18);
 
-  // date filter (if file includes a date column)
-  const dateMatches = row => {
-    if (!V_DT) return true;
-    const dISO = toISODate(row[V_DT]);
-    return dISO === isoDate;
-  };
+      const dateMatches = row => {
+        if (!V_DT) return true;
+        const dISO = toISODate(row[V_DT]);
+        return dISO === isoDate;
+      };
 
-  // If we have ID and at least one of BH/VAC columns, parse HH:MM or decimal
-  if (V_ID && (V_BH || V_VAC)) {
-    for (const r of vacRaw){
-      if (!dateMatches(r)) continue;
-      const id = normalizeId(r[V_ID]); if (!id) continue;
+      if (V_ID && (V_BH || V_VAC)) {
+        for (const r of vacRaw){
+          if (!dateMatches(r)) continue;
+          const id = normalizeId(r[V_ID]); if (!id) continue;
 
-      if (V_BH && r[V_BH] != null) {
-        const bhH = hoursToNumber(r[V_BH]);
-        if (bhH >= 11.9) bhSet.add(id);
-      }
-      if (V_VAC && r[V_VAC] != null) {
-        const vacH = hoursToNumber(r[V_VAC]);
-        if (vacH >= 9.5) vacSet.add(id);
+          if (V_BH && r[V_BH] != null) {
+            const bhH = hoursToNumber(r[V_BH]);
+            if (bhH >= 11.9) bhSet.add(id);
+          }
+          if (V_VAC && r[V_VAC] != null) {
+            const vacH = hoursToNumber(r[V_VAC]);
+            if (vacH >= 9.5) vacSet.add(id);
+          }
+        }
+      } else {
+        // Fallback: pay code style
+        const V_PC = findKey(v0, ["Pay Code","PayCode","Earning Code"]);
+        const V_AB = findKey(v0, ["Absence Name","Absence Type","Time Off Type","Time-Off Type","Category"]);
+        const V_HR = findKey(v0, ["Hours","Total Hours","Duration","Qty","Quantity","Scheduled Hours"]);
+        const getLabel = (row) => String(row[V_PC ?? V_AB] ?? row[V_AB ?? V_PC] ?? "").toLowerCase();
+
+        for (const r of vacRaw){
+          if (!dateMatches(r)) continue;
+          const id  = normalizeId(V_ID ? r[V_ID] : null);
+          if (!id) continue;
+          const label = getLabel(r);
+          const hrs   = hoursToNumber(V_HR ? r[V_HR] : null);
+
+          if (/(banked|holiday\s*bank|banked-?holiday|\bbh\b)/.test(label) && hrs >= 11.9){
+            bhSet.add(id);
+          } else if (/(vac|pto|annual|paid\s*time\s*off)/.test(label) && hrs >= 9.5){
+            vacSet.add(id);
+          }
+        }
       }
     }
-  } else {
-    // Fallback to generic Pay Code parsing if headers/positions are unexpected
-    const V_PC = findKey(v0, ["Pay Code","PayCode","Earning Code"]);
-    const V_AB = findKey(v0, ["Absence Name","Absence Type","Time Off Type","Time-Off Type","Category"]);
-    const V_HR = findKey(v0, ["Hours","Total Hours","Duration","Qty","Quantity","Scheduled Hours"]);
-    const getLabel = (row) => String(row[V_PC ?? V_AB] ?? row[V_AB ?? V_PC] ?? "").toLowerCase();
-
-    for (const r of vacRaw){
-      if (!dateMatches(r)) continue;
-      const id  = normalizeId(V_ID ? r[V_ID] : null);
-      if (!id) continue;
-      const label = getLabel(r);
-      const hrs   = hoursToNumber(V_HR ? r[V_HR] : null);
-
-      if (/(banked|holiday\s*bank|banked-?holiday|\bbh\b)/.test(label) && hrs >= 11.9){
-        bhSet.add(id);
-      } else if (/(vac|pto|annual|paid\s*time\s*off)/.test(label) && hrs >= 9.5){
-        vacSet.add(id);
-      }
-    }
-  }
-}
 
     /* ====== Helper: classify shift safely by local hour ====== */
     function classifyShiftSafe(ts){
@@ -461,7 +440,7 @@ if (vacRaw.length){
       const wasAccepted = r => {
         const cnt  = A_ACC  ? Number(r[A_ACC]) : NaN;
         const flag = A_FLAG ? String(r[A_FLAG]).trim().toLowerCase() : "";
-               const stat = A_STAT ? String(r[A_STAT]).trim().toUpperCase() : "";
+              const stat = A_STAT ? String(r[A_STAT]).trim().toUpperCase() : "";
         return (Number.isFinite(cnt) && cnt > 0)
             || ["true","1","yes"].includes(flag)
             || ["ACCEPTED","APPROVED","COMPLETED"].includes(stat);
@@ -517,7 +496,7 @@ if (vacRaw.length){
       vtoSet = normalizeSet(vtoRawSet);
     }
 
-    // ====== Swaps (now split by Shift Type Day/Night) ======
+    // ====== Swaps (split by Shift Type Day/Night if column available) ======
     const collectSwaps=(rows,mapping)=>{
       const out=[], inn=[];
       if (!rows.length) return {out,inn};
@@ -527,12 +506,12 @@ if (vacRaw.length){
       const S_ST    = findKey(s0, mapping.status || DEFAULT_SETTINGS.swap_mapping.status);
       const S_SKIP  = findKey(s0, mapping.skip_date || DEFAULT_SETTINGS.swap_mapping.skip_date);
       const S_WORK  = findKey(s0, mapping.work_date || DEFAULT_SETTINGS.swap_mapping.work_date);
-      const S_SHIFT = findKey(s0, ["Shift Type","Shift","Shift Name","ShiftTime"]); // <-- NEW
+      const S_SHIFT = findKey(s0, ["Shift Type","Shift","Shift Name","ShiftTime"]); // optional
 
       const APPROVED = (mapping.approved_statuses || DEFAULT_SETTINGS.swap_mapping.approved_statuses)
         .map(s=>String(s).toUpperCase());
 
-      const wantShift = shiftEl.value === "Night" ? /^NIGHT/i : /^DAY/i; // accept "DAY Shift", etc.
+      const wantShift = shiftEl.value === "Night" ? /^NIGHT/i : /^DAY/i;
 
       for (const r of rows){
         const id = normalizeId(r[S_ID]); if (!id) continue;
@@ -541,7 +520,6 @@ if (vacRaw.length){
         const ok = !S_ST || APPROVED.includes(st) || /APPROVED|COMPLETED|ACCEPTED/.test(st);
         if (!ok) continue;
 
-        // Shift Type filter
         const sv = S_SHIFT ? String(r[S_SHIFT]).trim() : "";
         if (S_SHIFT && sv && !wantShift.test(sv)) continue;
 
@@ -561,15 +539,17 @@ if (vacRaw.length){
     const swapInSet  = new Set([...S1.inn, ...S2.inn]);
 
     // ====== Build cohorts ======
-    // Exclusions from "expected": Vacation > BH > VTO > Swap-Out
+    // Expected = roster slice MINUS Vacation & Banked Holiday only.
+    // DO NOT exclude Swap-Out or VTO from Expected.
     const excluded = new Set();
-    for (const id of vacSet) if (byId.has(id)) excluded.add(id);
-    for (const id of bhSet)  if (byId.has(id) && !excluded.has(id)) excluded.add(id);
-    for (const id of vtoSet) if (byId.has(id) && !excluded.has(id)) excluded.add(id);
-    for (const id of swapOutSet) if (byId.has(id) && !excluded.has(id)) excluded.add(id);
+    for (const id of vacSet) if (byId.has(id)) excluded.add(id);  // Vacation
+    for (const id of bhSet)  if (byId.has(id)) excluded.add(id);  // Banked Holiday
+    // (intentionally NOT excluding VTO or Swap-Out)
 
-    const cohortExpected = roster.filter(x=>!excluded.has(x.id));
-    const cohortPresentExSwaps = cohortExpected.filter(x=>x.onp);
+    const cohortExpected = roster.filter(x => !excluded.has(x.id));
+
+    // Present (Excluding Swaps) = Expected who are on-prem AND not Swap-Out
+    const cohortPresentExSwaps = cohortExpected.filter(x => x.onp && !swapOutSet.has(x.id));
 
     // rows for display
     const swapOutRows        = [...swapOutSet].map(id=>byId.get(id)).filter(Boolean);
@@ -613,15 +593,20 @@ if (vacRaw.length){
       + rowHTML("VET Present", row_VETPresent)
       + "</tbody>";
 
-    // ---------- Ribbon chips ----------
-    const vacRows = [...vacSet].map(id=>byId.get(id)||fullById.get(id)).filter(Boolean).map(x=>({
-      id:x.id, dept_bucket:bucketOf(x), emp_type:x.typ, corner:x.corner, date:isoDate, reason:"Vacation"
-    }));
-    const bhRows  = [...bhSet].map(id=>byId.get(id)||fullById.get(id)).filter(Boolean).map(x=>({
-      id:x.id, dept_bucket:bucketOf(x), emp_type:x.typ, corner:x.corner, date:isoDate, reason:"Banked Holiday"
-    }));
+    // ---------- Ribbon chips (restricted to current shift slice only) ----------
+    const vacRows = [...vacSet]
+      .map(id=>byId.get(id))      // no fullById fallback -> prevents opposite shift leakage
+      .filter(Boolean)
+      .map(x=>({ id:x.id, dept_bucket:bucketOf(x), emp_type:x.typ, corner:x.corner, date:isoDate, reason:"Vacation" }));
+
+    const bhRows  = [...bhSet]
+      .map(id=>byId.get(id))
+      .filter(Boolean)
+      .map(x=>({ id:x.id, dept_bucket:bucketOf(x), emp_type:x.typ, corner:x.corner, date:isoDate, reason:"Banked Holiday" }));
+
     chipVacationCount.textContent = vacRows.length;
     chipBHCount.textContent = bhRows.length;
+
     const buildURL = (rows)=> {
       const headers=["id","dept_bucket","emp_type","corner","date","reason"];
       const csv=[headers.join(",")].concat(rows.map(r=>headers.map(h=>`"${String(r[h]??"").replace(/"/g,'""')}"`).join(","))).join("\n");
