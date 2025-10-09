@@ -360,38 +360,68 @@ async function processAll(){
     const sumTotals = ACC => depts.reduce((s,d)=>s+ACC[d].TOTAL,0);
 
     // ====== Hours Summary: Vacation (>=9.5h) & Banked Holiday (>=11.9h) ======
-    const vacSet = new Set();
-    const bhSet  = new Set();
+const vacSet = new Set();
+const bhSet  = new Set();
 
-    if (vacRaw.length){
-      const v0   = vacRaw[0] || {};
-      const V_ID = findKey(v0, ["Employee ID","Person ID","Person Number","Badge ID","ID"]);
-      const V_DT = findKey(v0, ["Date","Worked Date","Shift Date","Business Date","Shift Start Date"]);
-      const V_PC = findKey(v0, ["Pay Code","PayCode","Earning Code"]);
-      const V_AB = findKey(v0, ["Absence Name","Absence Type","Time Off Type","Time-Off Type","Category"]);
-      const V_HR = findKey(v0, ["Hours","Total Hours","Duration","Qty","Quantity","Scheduled Hours"]);
+if (vacRaw.length){
+  const v0   = vacRaw[0] || {};
+  const V_ID = findKey(v0, ["Employee ID","Person ID","Person Number","Badge ID","ID"]);
+  const V_DT = findKey(v0, ["Date","Worked Date","Shift Date","Business Date","Shift Start Date"]);
 
-      const getLabel = (row) => String(row[V_PC ?? V_AB] ?? row[V_AB ?? V_PC] ?? "").toLowerCase();
+  // helper: nth key fallback by Excel column letter (0-based: A=0... Q=16, S=18)
+  const nthKey = (row, idx) => {
+    const ks = Object.keys(row||{});
+    return (idx >= 0 && idx < ks.length) ? ks[idx] : null;
+  };
 
-      for (const r of vacRaw){
-        const id  = normalizeId(V_ID ? r[V_ID] : null);
-        if (!id) continue;
+  // 1) Prefer explicit header names; 2) fallback to positions: Q=16, S=18
+  const V_BH  = Object.keys(v0).find(k => /(banked\s*holiday|\bbh\b)/i.test(k)) || nthKey(v0, 16);
+  const V_VAC = Object.keys(v0).find(k => /vacation/i.test(k))                     || nthKey(v0, 18);
 
-        if (V_DT){
-          const dISO = toISODate(r[V_DT]);
-          if (dISO !== isoDate) continue;
-        }
+  // date filter (if file includes a date column)
+  const dateMatches = row => {
+    if (!V_DT) return true;
+    const dISO = toISODate(row[V_DT]);
+    return dISO === isoDate;
+  };
 
-        const label = getLabel(r);
-        const hrs   = hoursToNumber(V_HR ? r[V_HR] : null);
+  // If we have ID and at least one of BH/VAC columns, parse HH:MM or decimal
+  if (V_ID && (V_BH || V_VAC)) {
+    for (const r of vacRaw){
+      if (!dateMatches(r)) continue;
+      const id = normalizeId(r[V_ID]); if (!id) continue;
 
-        if (/(banked|holiday\s*bank|banked-?holiday|\bbh\b)/.test(label) && hrs >= 11.9){
-          bhSet.add(id);
-        } else if (/(vac|pto|annual|paid\s*time\s*off)/.test(label) && hrs >= 9.5){
-          vacSet.add(id);
-        }
+      if (V_BH && r[V_BH] != null) {
+        const bhH = hoursToNumber(r[V_BH]);
+        if (bhH >= 11.9) bhSet.add(id);
+      }
+      if (V_VAC && r[V_VAC] != null) {
+        const vacH = hoursToNumber(r[V_VAC]);
+        if (vacH >= 9.5) vacSet.add(id);
       }
     }
+  } else {
+    // Fallback to generic Pay Code parsing if headers/positions are unexpected
+    const V_PC = findKey(v0, ["Pay Code","PayCode","Earning Code"]);
+    const V_AB = findKey(v0, ["Absence Name","Absence Type","Time Off Type","Time-Off Type","Category"]);
+    const V_HR = findKey(v0, ["Hours","Total Hours","Duration","Qty","Quantity","Scheduled Hours"]);
+    const getLabel = (row) => String(row[V_PC ?? V_AB] ?? row[V_AB ?? V_PC] ?? "").toLowerCase();
+
+    for (const r of vacRaw){
+      if (!dateMatches(r)) continue;
+      const id  = normalizeId(V_ID ? r[V_ID] : null);
+      if (!id) continue;
+      const label = getLabel(r);
+      const hrs   = hoursToNumber(V_HR ? r[V_HR] : null);
+
+      if (/(banked|holiday\s*bank|banked-?holiday|\bbh\b)/.test(label) && hrs >= 11.9){
+        bhSet.add(id);
+      } else if (/(vac|pto|annual|paid\s*time\s*off)/.test(label) && hrs >= 9.5){
+        vacSet.add(id);
+      }
+    }
+  }
+}
 
     /* ====== Helper: classify shift safely by local hour ====== */
     function classifyShiftSafe(ts){
