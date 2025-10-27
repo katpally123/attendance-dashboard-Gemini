@@ -432,10 +432,11 @@ async function processAll(){
         return m ? m[1] : null;
       };
       const typeClass = raw => {
-        const t = String(raw||"").toLowerCase();
-        if (t.includes("vto")) return "VTO";
-        if (t.includes("vet") || t.includes("overtime")) return "VET";
-        return null;
+  const t = String(raw||"").toLowerCase();
+  if (t.includes("vto") || t.includes("timeoff") || t.includes("voluntarytimeoff")) return "VTO";
+  if (t.includes("vet") || t.includes("overtime") || t.includes("voluntaryovertime")) return "VET";
+  return null;
+};
       };
       const wasAccepted = r => {
         const cnt  = A_ACC  ? Number(r[A_ACC]) : NaN;
