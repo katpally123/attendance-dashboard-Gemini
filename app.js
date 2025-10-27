@@ -436,7 +436,6 @@ async function processAll(){
   if (t.includes("vto") || t.includes("timeoff") || t.includes("voluntarytimeoff")) return "VTO";
   if (t.includes("vet") || t.includes("overtime") || t.includes("voluntaryovertime")) return "VET";
   return null;
-};
       };
       const wasAccepted = r => {
         const cnt  = A_ACC  ? Number(r[A_ACC]) : NaN;
