@@ -569,6 +569,16 @@ async function processAll(){
     const row_VETExpected       = mkRow(); vetExpectedRows.forEach(x=>pushCount(row_VETExpected,x));
     const row_VETPresent        = mkRow(); vetPresentRows.forEach(x=>pushCount(row_VETPresent,x));
 
+    // Make summary objects globally accessible for Site Split functionality
+    window.row_RegularExpected = row_RegularExpected;
+    window.row_RegularPresentExS = row_RegularPresentExS;
+    window.row_SwapOut = row_SwapOut;
+    window.row_SwapInExpected = row_SwapInExpected;
+    window.row_SwapInPresent = row_SwapInPresent;
+    window.row_VTO = row_VTO;
+    window.row_VETExpected = row_VETExpected;
+    window.row_VETPresent = row_VETPresent;
+
     const header = `
       <thead>
         <tr>

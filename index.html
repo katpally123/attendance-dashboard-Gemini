@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="style.css"/>
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
   <script defer src="app.js"></script>
+  <script defer src="site-split.js"></script>
 </head>
 <body>
   <header>
@@ -23,6 +24,7 @@
     <nav class="tabs">
       <button id="tabDashboard" class="tab active">Dashboard</button>
       <button id="tabAudit" class="tab">Audit</button>
+      <button id="tab-siteSplit" class="tab">Site Split</button>
     </nav>
 
     <div class="actions">
@@ -88,6 +90,12 @@
       </div>
       <p class="hint">Breakdown of scheduled associates who did not show, grouped by reason (mutually exclusive: Vacation &gt; Banked Holiday &gt; VTO &gt; Swap-Out &gt; VET-not-shown &gt; No-Show).</p>
       <table id="auditTable" class="table"></table>
+    </section>
+
+    <!-- SITE SPLIT -->
+    <section id="siteSplitPage" class="card hidden">
+      <h2 class="card-title">Site × AMZN/TEMP (YHM2-SDC, ICQA, YDD2-IXD, Other)</h2>
+      <table id="siteSplitTable" class="table"></table>
     </section>
   </main>
 </body>
