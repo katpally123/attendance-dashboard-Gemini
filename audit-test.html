@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enhanced Audit Test</title>
+    <link rel="stylesheet" href="style.css"/>
+    <script src="audit-enhanced.js"></script>
+    <style>
+        body { padding: 20px; }
+        .test-section { margin-bottom: 30px; }
+    </style>
+</head>
+<body>
+    <h1>Enhanced Audit Functionality Test</h1>
+    
+    <div class="test-section">
+        <h2>Interactive Audit Table</h2>
+        <p class="hint">Click on any count to see associate details. Click on reason names to see all associates for that reason.</p>
+        <table id="testAuditTable" class="table"></table>
+    </div>
+
+    <script>
+        // Mock audit data
+        const mockAuditCounts = {
+            "Vacation / PTO": {
+                Inbound: { AMZN: 2, TEMP: 1, TOTAL: 3 },
+                DA: { AMZN: 1, TEMP: 0, TOTAL: 1 },
+                ICQA: { AMZN: 0, TEMP: 1, TOTAL: 1 },
+                CRETs: { AMZN: 1, TEMP: 2, TOTAL: 3 }
+            },
+            "Banked Holiday": {
+                Inbound: { AMZN: 0, TEMP: 0, TOTAL: 0 },
+                DA: { AMZN: 0, TEMP: 0, TOTAL: 0 },
+                ICQA: { AMZN: 0, TEMP: 0, TOTAL: 0 },
+                CRETs: { AMZN: 0, TEMP: 0, TOTAL: 0 }
+            },
+            "VTO accepted": {
+                Inbound: { AMZN: 0, TEMP: 0, TOTAL: 0 },
+                DA: { AMZN: 0, TEMP: 0, TOTAL: 0 },
+                ICQA: { AMZN: 0, TEMP: 0, TOTAL: 0 },
+                CRETs: { AMZN: 0, TEMP: 8, TOTAL: 8 }
+            },
+            "Swap-Out": {
+                Inbound: { AMZN: 1, TEMP: 0, TOTAL: 1 },
+                DA: { AMZN: 0, TEMP: 0, TOTAL: 0 },
+                ICQA: { AMZN: 1, TEMP: 0, TOTAL: 1 },
+                CRETs: { AMZN: 0, TEMP: 0, TOTAL: 0 }
+            },
+            "VET accepted but not shown": {
+                Inbound: { AMZN: 0, TEMP: 0, TOTAL: 0 },
+                DA: { AMZN: 0, TEMP: 0, TOTAL: 0 },
+                ICQA: { AMZN: 0, TEMP: 0, TOTAL: 0 },
+                CRETs: { AMZN: 0, TEMP: 0, TOTAL: 0 }
+            },
+            "No-Show (plain)": {
+                Inbound: { AMZN: 2, TEMP: 3, TOTAL: 5 },
+                DA: { AMZN: 1, TEMP: 1, TOTAL: 2 },
+                ICQA: { AMZN: 1, TEMP: 0, TOTAL: 1 },
+                CRETs: { AMZN: 0, TEMP: 8, TOTAL: 8 }
+            }
+        };
+
+        const mockAuditReasons = [
+            "Vacation / PTO",
+            "Banked Holiday", 
+            "VTO accepted",
+            "Swap-Out",
+            "VET accepted but not shown",
+            "No-Show (plain)"
+        ];
+
+        const depts = ["Inbound", "DA", "ICQA", "CRETs"];
+
+        // Mock detailed associate data
+        const mockDetailData = {
+            "Vacation / PTO": [
+                { id: "EMP001", dept_bucket: "Inbound", emp_type: "AMZN", corner: "DB", date: "2025-10-30", reason: "Vacation / PTO" },
+                { id: "EMP002", dept_bucket: "Inbound", emp_type: "AMZN", corner: "DN", date: "2025-10-30", reason: "Vacation / PTO" },
+                { id: "EMP003", dept_bucket: "Inbound", emp_type: "TEMP", corner: "DC", date: "2025-10-30", reason: "Vacation / PTO" },
+                { id: "EMP004", dept_bucket: "DA", emp_type: "AMZN", corner: "DH", date: "2025-10-30", reason: "Vacation / PTO" },
+                { id: "EMP005", dept_bucket: "ICQA", emp_type: "TEMP", corner: "DB", date: "2025-10-30", reason: "Vacation / PTO" },
+                { id: "EMP006", dept_bucket: "CRETs", emp_type: "AMZN", corner: "DN", date: "2025-10-30", reason: "Vacation / PTO" },
+                { id: "EMP007", dept_bucket: "CRETs", emp_type: "TEMP", corner: "DC", date: "2025-10-30", reason: "Vacation / PTO" },
+                { id: "EMP008", dept_bucket: "CRETs", emp_type: "TEMP", corner: "DH", date: "2025-10-30", reason: "Vacation / PTO" }
+            ],
+            "VTO accepted": [
+                { id: "EMP101", dept_bucket: "CRETs", emp_type: "TEMP", corner: "DB", date: "2025-10-30", reason: "VTO accepted" },
+                { id: "EMP102", dept_bucket: "CRETs", emp_type: "TEMP", corner: "DN", date: "2025-10-30", reason: "VTO accepted" },
+                { id: "EMP103", dept_bucket: "CRETs", emp_type: "TEMP", corner: "DC", date: "2025-10-30", reason: "VTO accepted" },
+                { id: "EMP104", dept_bucket: "CRETs", emp_type: "TEMP", corner: "DH", date: "2025-10-30", reason: "VTO accepted" },
+                { id: "EMP105", dept_bucket: "CRETs", emp_type: "TEMP", corner: "DB", date: "2025-10-30", reason: "VTO accepted" },
+                { id: "EMP106", dept_bucket: "CRETs", emp_type: "TEMP", corner: "DN", date: "2025-10-30", reason: "VTO accepted" },
+                { id: "EMP107", dept_bucket: "CRETs", emp_type: "TEMP", corner: "DC", date: "2025-10-30", reason: "VTO accepted" },
+                { id: "EMP108", dept_bucket: "CRETs", emp_type: "TEMP", corner: "DH", date: "2025-10-30", reason: "VTO accepted" }
+            ],
+            "Swap-Out": [
+                { id: "EMP201", dept_bucket: "Inbound", emp_type: "AMZN", corner: "DB", date: "2025-10-30", reason: "Swap-Out" },
+                { id: "EMP202", dept_bucket: "ICQA", emp_type: "AMZN", corner: "DN", date: "2025-10-30", reason: "Swap-Out" }
+            ],
+            "No-Show (plain)": [
+                { id: "EMP301", dept_bucket: "Inbound", emp_type: "AMZN", corner: "DB", date: "2025-10-30", reason: "No-Show (plain)" },
+                { id: "EMP302", dept_bucket: "Inbound", emp_type: "AMZN", corner: "DN", date: "2025-10-30", reason: "No-Show (plain)" },
+                { id: "EMP303", dept_bucket: "Inbound", emp_type: "TEMP", corner: "DC", date: "2025-10-30", reason: "No-Show (plain)" },
+                { id: "EMP304", dept_bucket: "Inbound", emp_type: "TEMP", corner: "DH", date: "2025-10-30", reason: "No-Show (plain)" },
+                { id: "EMP305", dept_bucket: "Inbound", emp_type: "TEMP", corner: "DB", date: "2025-10-30", reason: "No-Show (plain)" },
+                { id: "EMP306", dept_bucket: "DA", emp_type: "AMZN", corner: "DN", date: "2025-10-30", reason: "No-Show (plain)" },
+                { id: "EMP307", dept_bucket: "DA", emp_type: "TEMP", corner: "DC", date: "2025-10-30", reason: "No-Show (plain)" },
+                { id: "EMP308", dept_bucket: "ICQA", emp_type: "AMZN", corner: "DH", date: "2025-10-30", reason: "No-Show (plain)" },
+                { id: "EMP309", dept_bucket: "CRETs", emp_type: "TEMP", corner: "DB", date: "2025-10-30", reason: "No-Show (plain)" },
+                { id: "EMP310", dept_bucket: "CRETs", emp_type: "TEMP", corner: "DN", date: "2025-10-30", reason: "No-Show (plain)" },
+                { id: "EMP311", dept_bucket: "CRETs", emp_type: "TEMP", corner: "DC", date: "2025-10-30", reason: "No-Show (plain)" },
+                { id: "EMP312", dept_bucket: "CRETs", emp_type: "TEMP", corner: "DH", date: "2025-10-30", reason: "No-Show (plain)" },
+                { id: "EMP313", dept_bucket: "CRETs", emp_type: "TEMP", corner: "DB", date: "2025-10-30", reason: "No-Show (plain)" },
+                { id: "EMP314", dept_bucket: "CRETs", emp_type: "TEMP", corner: "DN", date: "2025-10-30", reason: "No-Show (plain)" },
+                { id: "EMP315", dept_bucket: "CRETs", emp_type: "TEMP", corner: "DC", date: "2025-10-30", reason: "No-Show (plain)" },
+                { id: "EMP316", dept_bucket: "CRETs", emp_type: "TEMP", corner: "DH", date: "2025-10-30", reason: "No-Show (plain)" }
+            ],
+            "Banked Holiday": [],
+            "VET accepted but not shown": []
+        };
+
+        function sumTotals(ACC) {
+            return depts.reduce((s, d) => s + ACC[d].TOTAL, 0);
+        }
+
+        // Initialize the test
+        function initTest() {
+            // Store mock detail data
+            window.storeAuditDetailData(mockDetailData);
+            
+            // Render the enhanced table
+            const tableEl = document.getElementById('testAuditTable');
+            const enhancedHTML = window.renderEnhancedAuditTable(mockAuditCounts, mockAuditReasons, depts, sumTotals);
+            tableEl.innerHTML = enhancedHTML;
+            
+            // Attach click handlers
+            window.enhanceAuditTable();
+        }
+
+        // Run test when page loads
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initTest);
+        } else {
+            initTest();
+        }
+    </script>
+</body>
+</html>

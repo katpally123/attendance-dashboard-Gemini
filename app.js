@@ -664,21 +664,37 @@ async function processAll(){
       pushCount(auditCounts[reason], row);
     }
 
-    const auditHeader = `
-      <thead>
-        <tr>
-          <th>Absence Reason</th>
-          ${depts.map(d=>`<th>${d} AMZN</th><th>${d} TEMP</th>`).join("")}
-          <th>Total</th>
-        </tr>
-      </thead>`;
-    const auditBody = auditReasons.map(label=>{
-      const ACC = auditCounts[label];
-      const cells = depts.map(d=>`<td>${ACC[d].AMZN}</td><td>${ACC[d].TEMP}</td>`).join("");
-      const total = sumTotals(ACC);
-      return `<tr><td>${label}</td>${cells}<td>${total}</td></tr>`;
-    }).join("");
-    auditTable.innerHTML = auditHeader + "<tbody>" + auditBody + "</tbody>";
+    // Use enhanced audit table rendering if available
+    if (typeof window.renderEnhancedAuditTable === 'function' && typeof window.processAuditDetailData === 'function') {
+      // Process detailed audit data for interactive features
+      window.processAuditDetailData(reasonOf, byId, fullById, bucketOf, isoDate);
+      
+      // Render enhanced audit table with clickable cells
+      const enhancedTable = window.renderEnhancedAuditTable(auditCounts, auditReasons, depts, sumTotals);
+      auditTable.innerHTML = enhancedTable;
+      
+      // Attach click handlers
+      if (typeof window.enhanceAuditTable === 'function') {
+        window.enhanceAuditTable();
+      }
+    } else {
+      // Fallback to original audit table
+      const auditHeader = `
+        <thead>
+          <tr>
+            <th>Absence Reason</th>
+            ${depts.map(d=>`<th>${d} AMZN</th><th>${d} TEMP</th>`).join("")}
+            <th>Total</th>
+          </tr>
+        </thead>`;
+      const auditBody = auditReasons.map(label=>{
+        const ACC = auditCounts[label];
+        const cells = depts.map(d=>`<td>${ACC[d].AMZN}</td><td>${ACC[d].TEMP}</td>`).join("");
+        const total = sumTotals(ACC);
+        return `<tr><td>${label}</td>${cells}<td>${total}</td></tr>`;
+      }).join("");
+      auditTable.innerHTML = auditHeader + "<tbody>" + auditBody + "</tbody>";
+    }
 
     const auditRows = [];
     for (const [id, reason] of reasonOf.entries()){
