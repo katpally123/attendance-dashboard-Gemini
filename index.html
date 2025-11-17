@@ -18,22 +18,31 @@
 </head>
 <body>
   <header>
-    <!-- Logo + Name (keeps your original header structure) -->
+    <!-- Left: Logo + Name + Version -->
     <div class="logo" style="display:flex;align-items:center;gap:10px;">
       <img src="assets/yhm2-logo.png" alt="YHM2 logo" style="width:36px;height:36px;object-fit:contain"/>
-      <span>PXT Phoenix</span>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span>YHM2 PHOENIX - V2</span>
+      </div>
     </div>
 
+    <!-- Middle: Navigation tabs -->
     <nav class="tabs">
       <button id="tabDashboard" class="tab active">Dashboard</button>
-      <button id="tabAudit" class="tab">Audit</button>
-      <button id="tabOps" class="tab tab-disabled" disabled title="Ops tab locked">Ops</button>
       <button id="tab-siteSplit" class="tab">Site Split</button>
+      <button id="tabAudit" class="tab">Audit</button>
+      <button id="tabOps" class="tab tab-disabled" disabled title="Ops tab locked">
+        Ops
+        <svg style="width:12px;height:12px;margin-left:4px;" fill="currentColor" viewBox="0 0 20 20">
+          <path fill-rule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clip-rule="evenodd"/>
+        </svg>
+      </button>
     </nav>
 
+    <!-- Right: Status + Buttons -->
     <div class="actions">
-      <button id="processBtn" class="btn">Process Files</button>
       <span id="fileStatus" class="chip chip-muted">Ready</span>
+      <button id="processBtn" class="btn">Process Files</button>
     </div>
   </header>
 
@@ -80,11 +89,6 @@
       <div class="table-wrapper">
         <table id="replicaTable" class="table"></table>
       </div>
-
-      <div class="row mt" style="gap:12px; align-items:center;">
-        <button id="dlNoShow" class="btn btn-green">Download No-Show CSV</button>
-        <span class="hint">(No-Show = scheduled after Vacation/BH/VTO/Swap-out, but not on-prem)</span>
-      </div>
     </section>
 
     <!-- AUDIT -->
@@ -113,9 +117,13 @@
     <!-- SITE SPLIT -->
     <section id="siteSplitPage" class="card hidden">
       <h2 class="card-title">Site × AMZN/TEMP (YHM2-SDC, ICQA, YDD2-IXD, Other)</h2>
-      <div style="display:flex; align-items:center; gap:12px; margin-bottom:8px;">
-        <button id="downloadSiteSplitTemplate" class="btn">Download Site Split Template</button>
-        <span class="hint">Generates an Excel identical to the template with current data.</span>
+      <div style="display:flex; align-items:center; gap:12px; margin-bottom:12px;">
+        <button id="downloadSiteSplitTemplate" class="btn">
+          <svg style="width:14px;height:14px;margin-right:6px;display:inline-block;vertical-align:middle;" fill="currentColor" viewBox="0 0 20 20">
+            <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd"/>
+          </svg>
+          Export Attendance Report
+        </button>
       </div>
       <div class="table-wrapper">
         <table id="siteSplitTable" class="table"></table>
