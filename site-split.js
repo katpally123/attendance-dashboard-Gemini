@@ -163,7 +163,7 @@ function renderSiteSplitTable() {
       ${rowHTML("Shift Swap Expected", window.row_SwapInExpected)}
       ${rowHTML("Shift Swap Present", window.row_SwapInPresent)}
       ${rowHTML("VTO", window.row_VTO)}
-      ${rowHTML("VET Expected", window.row_VETExpected)}
+      ${rowHTML("VET Accepted", window.row_VETExpected)}
       ${rowHTML("VET Present", window.row_VETPresent)}
     </tbody>`;
 
@@ -246,6 +246,110 @@ function initializeSiteSplit() {
     siteSplitTab.addEventListener("click", () => switchTabExtended("siteSplit"));
   }
 
+  // Disable download until rows are computed via processAll()
+  const dlBtnInit = document.getElementById("downloadSiteSplitTemplate");
+  if (dlBtnInit) {
+    const rowsReady = typeof window.row_RegularExpected !== 'undefined';
+    dlBtnInit.disabled = !rowsReady;
+    // Poll for rows becoming available in case processAll is defined later
+    if (!rowsReady) {
+      const enabler = setInterval(() => {
+        if (typeof window.row_RegularExpected !== 'undefined') {
+          dlBtnInit.disabled = false;
+          clearInterval(enabler);
+        }
+      }, 300);
+    }
+  }
+
+  // Simple backend connectivity test (runs on Site Split load)
+  try {
+    fetch(BACKEND_EXPORT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}"
+    })
+      .then(res => {
+        console.log("Connection status:", res.status);
+        console.log("CONNECTED");
+      })
+      .catch(err => {
+        console.error("Connection error:", err);
+        console.log("NOT CONNECTED");
+      });
+  } catch (e) {
+    console.error("Connection error:", e);
+    console.log("NOT CONNECTED");
+  }
+
+  // Hook up template download button (exact handler as requested)
+  document.getElementById("downloadSiteSplitTemplate")
+    .addEventListener("click", async () => {
+      console.log("[SiteSplit] downloadSiteSplitTemplate button clicked");
+      try {
+        if (typeof window.row_RegularExpected === 'undefined') {
+          alert("Please click 'Process Files' first to build Site Split data.");
+          return;
+        }
+        const shiftEl = document.getElementById("shiftInput");
+        const shift = shiftEl ? shiftEl.value : "Day";
+        const today = new Date();
+        const date = today.toISOString().slice(0,10);
+
+        const stripTotalsRow = (row)=>{
+          const out = {};
+          for (const [dept, obj] of Object.entries(row || {})){
+            const amzn = Number((obj && obj.AMZN) || 0);
+            const temp = Number((obj && obj.TEMP) || 0);
+            out[dept] = { AMZN: amzn, TEMP: temp };
+          }
+          return out;
+        };
+
+        const payload = {
+          "RegularHC": stripTotalsRow(window.row_RegularExpected),
+          "RegularHCPresent": stripTotalsRow(window.row_RegularPresentExS),
+          "SwapOut": stripTotalsRow(window.row_SwapOut),
+          "SwapExpected": stripTotalsRow(window.row_SwapInExpected),
+          "SwapPresent": stripTotalsRow(window.row_SwapInPresent),
+          "VTO": stripTotalsRow(window.row_VTO),
+          "VETAccepted": stripTotalsRow(window.row_VETExpected),
+          "VETPresent": stripTotalsRow(window.row_VETPresent)
+        };
+
+        console.log("Payload sent to backend:", payload);
+        const payloadJson = JSON.stringify(payload, null, 2);
+        console.log("[SiteSplit] Payload JSON (exact):\n" + payloadJson);
+        try { await navigator.clipboard.writeText(payloadJson); console.log("[SiteSplit] Payload copied to clipboard"); } catch {}
+        const res = await fetch(BACKEND_EXPORT, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        console.log("[SiteSplit] Fetch response status:", res.status);
+
+        if (!res.ok) {
+          const msg = await res.text();
+          throw new Error(`Server error (${res.status}): ${msg}`);
+        }
+
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `Site_Split_filled_${date}_${shift}.xlsx`;
+        document.body.appendChild(a);
+        a.click();
+        URL.revokeObjectURL(url);
+        a.remove();
+
+      } catch (err) {
+        console.error("Template download failed:", err);
+        const show = BACKEND_EXPORT || BACKEND_BASE || "http://127.0.0.1:10000";
+        alert(`Failed to download template: ${err.message}\nBackend base used: ${show}`);
+      }
+  });
+
   // Override the original switchTab function if it exists
   if (typeof window.switchTab === 'function') {
     const originalSwitchTab = window.switchTab;
@@ -289,6 +393,9 @@ function initializeSiteSplit() {
  */
 function onProcessComplete() {
   renderSiteSplitTable();
+  // Re-enable the download button now that rows are ready
+  const btn = document.getElementById('downloadSiteSplitTemplate');
+  if (btn) btn.disabled = false;
 }
 
 /**

@@ -42,8 +42,12 @@ const processBtn = document.getElementById("processBtn");
 // tabs
 const tabDash = document.getElementById("tabDashboard");
 const tabAudit= document.getElementById("tabAudit");
+const tabOps = document.getElementById("tabOps");
+const tabSiteSplit = document.getElementById("tab-siteSplit");
 const panelDash = document.getElementById("panelDashboard");
 const panelAudit= document.getElementById("panelAudit");
+const panelOps = document.getElementById("panelOps");
+const panelSiteSplit = document.getElementById("siteSplitPage");
 
 // ribbon
 const chipDay = document.getElementById("chipDay");
@@ -73,22 +77,89 @@ const btnAuditCSV = document.getElementById("dlAuditCSV");
   shiftEl.value = "Day";
   updateRibbonStatic();
 
+  // Debug: Check if DOM elements exist
+  console.log("DOM Elements:", {
+    tabOps: !!tabOps,
+    panelOps: !!panelOps,
+    tabOpsId: tabOps?.id,
+    panelOpsId: panelOps?.id
+  });
+
   tabDash.addEventListener("click", ()=>switchTab("dash"));
   tabAudit.addEventListener("click", ()=>switchTab("audit"));
+    // Prevent opening Ops tab (locked)
+    tabOps.addEventListener("click", (e)=>{
+      e.preventDefault();
+      alert("Ops tab is locked.");
+    });
+  tabSiteSplit.addEventListener("click", ()=>switchTab("siteSplit"));
 
   dateEl.addEventListener("change", updateRibbonStatic);
   shiftEl.addEventListener("change", updateRibbonStatic);
 
   processBtn.addEventListener("click", processAll);
+  // Dashboard XLSX download is disabled on Dashboard page per requirements (Site Split handles Excel downloads)
 })();
 
 function switchTab(which){
+  console.log("switchTab called with:", which);
+  
+  // Remove active class from all tabs
+  tabDash.classList.remove("active");
+  tabAudit.classList.remove("active");
+    if (which === "ops") {
+      // Locked: do nothing
+      return;
+    } else {
+      tabOps.classList.remove("active");
+    }
+  tabSiteSplit.classList.remove("active");
+  
+  // Hide all panels
+  panelDash.classList.add("hidden");
+  panelAudit.classList.add("hidden");
+  panelOps.classList.add("hidden");
+  panelSiteSplit.classList.add("hidden");
+  
+  // Show selected tab and panel
   if (which==="dash"){
-    tabDash.classList.add("active"); tabAudit.classList.remove("active");
-    panelDash.classList.remove("hidden"); panelAudit.classList.add("hidden");
-  }else{
-    tabAudit.classList.add("active"); tabDash.classList.remove("active");
-    panelAudit.classList.remove("hidden"); panelDash.classList.add("hidden");
+    tabDash.classList.add("active");
+    panelDash.classList.remove("hidden");
+  }else if (which==="audit"){
+    tabAudit.classList.add("active");
+    panelAudit.classList.remove("hidden");
+  }else if (which==="ops"){
+    console.log("Switching to ops tab");
+    tabOps.classList.add("active");
+    panelOps.classList.remove("hidden");
+    console.log("Ops panel should be visible now");
+    // Render ops dashboard when tab is opened
+    if (typeof renderOpsDashboard === 'function') {
+      console.log("Calling renderOpsDashboard");
+      renderOpsDashboard();
+    } else if (typeof window.testOpsRender === 'function') {
+      console.log("renderOpsDashboard not found, using test render");
+      window.testOpsRender();
+    } else {
+      console.error("No ops render functions available");
+      // Fallback direct render
+      const container = document.getElementById("opsTableContainer");
+      if (container) {
+        container.innerHTML = `
+          <div class="ops-section">
+            <h3>⚠️ Ops Loading Issue</h3>
+            <p>The ops functionality is not fully loaded yet. Try refreshing the page.</p>
+          </div>
+        `;
+      }
+    }
+  }else if (which==="siteSplit"){
+    tabSiteSplit.classList.add("active");
+    panelSiteSplit.classList.remove("hidden");
+    // Render site split table when tab is opened
+    if (typeof renderSiteSplitTable === 'function') {
+      renderSiteSplitTable();
+    }
   }
 }
 
@@ -96,6 +167,71 @@ function updateRibbonStatic(){
   chipDay.textContent = new Date(dateEl.value+"T00:00:00").toLocaleDateString("en-US",{weekday:"long"});
   chipShift.textContent = shiftEl.value;
   chipCorners.textContent = ""; chipCornerSource.textContent = "";
+}
+
+// ================== DASHBOARD DOWNLOAD ==================
+function buildAttendancePayload(){
+  if (!window.row_RegularExpected) {
+    throw new Error("Process files first to build dashboard data.");
+  }
+  // Helper to strip TOTAL from each department object
+  const stripTotalsRow = (row)=>{
+    const out = {};
+    for (const [dept, obj] of Object.entries(row || {})){
+      const amzn = Number((obj && obj.AMZN) || 0);
+      const temp = Number((obj && obj.TEMP) || 0);
+      out[dept] = { AMZN: amzn, TEMP: temp };
+    }
+    return out;
+  };
+
+  // Payload must match backend expected structure and exclude TOTAL
+  return {
+    "RegularHC": stripTotalsRow(window.row_RegularExpected),
+    "RegularHCPresent": stripTotalsRow(window.row_RegularPresentExS),
+    "SwapOut": stripTotalsRow(window.row_SwapOut),
+    "SwapExpected": stripTotalsRow(window.row_SwapInExpected),
+    "SwapPresent": stripTotalsRow(window.row_SwapInPresent),
+    "VTO": stripTotalsRow(window.row_VTO),
+    "VETAccepted": stripTotalsRow(window.row_VETExpected),
+    "VETPresent": stripTotalsRow(window.row_VETPresent)
+  };
+}
+
+async function downloadDashboard(){
+  try {
+    const payload = buildAttendancePayload();
+    const url = BACKEND_EXPORT;
+    // Instrumentation: log exact payload before sending
+    console.log("Payload sent to backend:", payload);
+    alert(JSON.stringify(payload, null, 2));
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Server error ${res.status}: ${text}`);
+    }
+    const blob = await res.blob();
+    const href = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = href;
+    const d = dateEl?.value || new Date().toISOString().slice(0,10);
+    const s = shiftEl?.value || 'Day';
+    a.download = `Attendance_Dashboard_${d}_${s}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(()=>{ URL.revokeObjectURL(href); a.remove(); }, 0);
+  } catch (err) {
+    console.error('Dashboard download failed:', err);
+    alert(`Failed to download dashboard: ${err.message}`);
+  }
+}
+
+async function downloadDashboardTemplateTest(){
+  // Removed: No template GET endpoint allowed per requirements
 }
 
 // ================== HELPERS ==================
@@ -326,8 +462,9 @@ async function processAll(){
     const bucketOf = x => {
       const dept = String(x.deptId || "").trim();
       const area = String(x.area || "").trim();
-      if (cfg.ICQA.dept_ids.includes(dept) && area === String(cfg.ICQA.management_area_id)) return "ICQA";
-      if (cfg.CRETs.dept_ids.includes(dept) && area === String(cfg.CRETs.management_area_id)) return "CRETs";
+      // Prioritize Management Area for ICQA (27) and CRETs (22)
+      if (area === String(cfg.ICQA.management_area_id)) return "ICQA";
+      if (area === String(cfg.CRETs.management_area_id)) return "CRETs";
       if (cfg.DA.dept_ids.includes(dept)) return "DA";
       if (cfg.Inbound.dept_ids.includes(dept)) return "Inbound";
       return "Other";
@@ -570,14 +707,53 @@ async function processAll(){
     const row_VETPresent        = mkRow(); vetPresentRows.forEach(x=>pushCount(row_VETPresent,x));
 
     // Make summary objects globally accessible for Site Split functionality
-    window.row_RegularExpected = row_RegularExpected;
-    window.row_RegularPresentExS = row_RegularPresentExS;
-    window.row_SwapOut = row_SwapOut;
-    window.row_SwapInExpected = row_SwapInExpected;
-    window.row_SwapInPresent = row_SwapInPresent;
-    window.row_VTO = row_VTO;
-    window.row_VETExpected = row_VETExpected;
-    window.row_VETPresent = row_VETPresent;
+    const deepFreeze = (obj)=>{
+      if (!obj || typeof obj !== 'object') return obj;
+      Object.getOwnPropertyNames(obj).forEach(k=>{
+        const v = obj[k];
+        if (v && typeof v === 'object') deepFreeze(v);
+      });
+      return Object.freeze(obj);
+    };
+    window.row_RegularExpected   = deepFreeze(row_RegularExpected);
+    window.row_RegularPresentExS = deepFreeze(row_RegularPresentExS);
+    window.row_SwapOut           = deepFreeze(row_SwapOut);
+    window.row_SwapInExpected    = deepFreeze(row_SwapInExpected);
+    window.row_SwapInPresent     = deepFreeze(row_SwapInPresent);
+    window.row_VTO               = deepFreeze(row_VTO);
+    window.row_VETExpected       = deepFreeze(row_VETExpected);
+    window.row_VETPresent        = deepFreeze(row_VETPresent);
+
+    // Diagnostics: print rows after computation to verify non-zero values
+    console.log("[Rows] RegularHC:", row_RegularExpected);
+    console.log("[Rows] RegularHCPresent:", row_RegularPresentExS);
+    console.log("[Rows] SwapOut:", row_SwapOut);
+    console.log("[Rows] SwapExpected:", row_SwapInExpected);
+    console.log("[Rows] SwapPresent:", row_SwapInPresent);
+    console.log("[Rows] VTO:", row_VTO);
+    console.log("[Rows] VETAccepted:", row_VETExpected);
+    console.log("[Rows] VETPresent:", row_VETPresent);
+
+    // Additional summary to catch misclassification into Other
+    const sumBucket = acc => Object.values(acc).reduce((s,v)=> s + (v.AMZN||0) + (v.TEMP||0), 0);
+    console.log("[Rows Summary Totals]", {
+      RegularHC: sumBucket(row_RegularExpected),
+      RegularHCPresent: sumBucket(row_RegularPresentExS),
+      SwapOut: sumBucket(row_SwapOut),
+      SwapExpected: sumBucket(row_SwapInExpected),
+      SwapPresent: sumBucket(row_SwapInPresent),
+      VTO: sumBucket(row_VTO),
+      VETAccepted: sumBucket(row_VETExpected),
+      VETPresent: sumBucket(row_VETPresent)
+    });
+
+    // Make roster data and counts accessible for Ops functionality
+    window.roster = rosterFullRows;  // Use full roster for ops (not filtered by corner)
+    window.rosterFiltered = roster;  // Keep filtered roster for other uses
+    window.swapInCount = swapInPresentRows.length;
+    window.swapOutCount = swapOutRows.length;
+    window.vetCount = vetPresentRows.length;
+    window.vtoCount = [...vtoSet].length;
 
     const header = `
       <thead>
@@ -599,7 +775,7 @@ async function processAll(){
       + rowHTML("Shift Swap Expected", row_SwapInExpected)
       + rowHTML("Shift Swap Present", row_SwapInPresent)
       + rowHTML("VTO", row_VTO)
-      + rowHTML("VET Expected", row_VETExpected)
+      + rowHTML("VET Accepted", row_VETExpected)
       + rowHTML("VET Present", row_VETPresent)
       + "</tbody>";
 
@@ -701,7 +877,12 @@ async function processAll(){
       const x = byId.get(id) || fullById.get(id); if (!x) continue;
       auditRows.push({ id:x.id, dept_bucket:bucketOf(x), emp_type:x.typ, corner:x.corner, date:isoDate, reason });
     }
-    btnAuditCSV.onclick = ()=> downloadCSV(`audit_${isoDate}.csv`, auditRows.length?auditRows:[{id:"",dept_bucket:"",emp_type:"",corner:"",date:isoDate,reason:""}]);
+    btnAuditCSV.onclick = ()=> downloadCSV(`audit_${isoDate}.csv`, auditRows.length?auditRows:[{id:"",dept_bucket:"",emp_type:"",corner:isoDate,reason:""}]);
+
+    // Update ops dashboard if it's currently visible
+    if (typeof renderOpsDashboard === 'function' && tabOps && tabOps.classList.contains('active')) {
+      renderOpsDashboard();
+    }
 
     fileStatus.textContent = "Done";
   }catch(e){

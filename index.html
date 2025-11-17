@@ -10,9 +10,11 @@
 
   <link rel="stylesheet" href="style.css"/>
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
-  <script defer src="app.js"></script>
+  <script defer src="ops.js"></script>
+  <script defer src="config.js"></script>
   <script defer src="site-split.js"></script>
   <script defer src="audit-enhanced.js"></script>
+  <script defer src="app.js"></script>
 </head>
 <body>
   <header>
@@ -25,6 +27,7 @@
     <nav class="tabs">
       <button id="tabDashboard" class="tab active">Dashboard</button>
       <button id="tabAudit" class="tab">Audit</button>
+      <button id="tabOps" class="tab tab-disabled" disabled title="Ops tab locked">Ops</button>
       <button id="tab-siteSplit" class="tab">Site Split</button>
     </nav>
 
@@ -76,7 +79,7 @@
       <h2 class="card-title">Dept × AMZN/TEMP (Inbound, DA, ICQA, CRETs)</h2>
       <table id="replicaTable" class="table"></table>
 
-      <div class="row mt">
+      <div class="row mt" style="gap:12px; align-items:center;">
         <button id="dlNoShow" class="btn btn-green">Download No-Show CSV</button>
         <span class="hint">(No-Show = scheduled after Vacation/BH/VTO/Swap-out, but not on-prem)</span>
       </div>
@@ -93,9 +96,23 @@
       <table id="auditTable" class="table"></table>
     </section>
 
+    <!-- OPS -->
+    <section id="panelOps" class="card hidden">
+      <div class="row">
+        <h2 class="card-title">Operations Dashboard</h2>
+        <div class="grow"></div>
+      </div>
+      <p class="hint">Planned vs Present headcount by shift code for YDD2-CRETS and YHM2-Inbound/Outbound operations. Includes Swap In/Out, VET, and VTO adjustments.</p>
+      <div id="opsTableContainer"></div>
+    </section>
+
     <!-- SITE SPLIT -->
     <section id="siteSplitPage" class="card hidden">
       <h2 class="card-title">Site × AMZN/TEMP (YHM2-SDC, ICQA, YDD2-IXD, Other)</h2>
+      <div style="display:flex; align-items:center; gap:12px; margin-bottom:8px;">
+        <button id="downloadSiteSplitTemplate" class="btn">Download Site Split Template</button>
+        <span class="hint">Generates an Excel identical to the template with current data.</span>
+      </div>
       <table id="siteSplitTable" class="table"></table>
     </section>
   </main>
