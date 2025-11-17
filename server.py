@@ -71,7 +71,7 @@ def download_template():
     content = build_site_split_xlsx(TEMPLATE_PATH, rows, shift, date_str)
     return send_file(BytesIO(content),
                      as_attachment=True,
-                     download_name=f"Site_Split_filled_{date_str}_{shift}.xlsx",
+                     download_name=f"Attendance_report_{date_str}_{shift}.xlsx",
                      mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
 if __name__ == '__main__':

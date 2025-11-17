@@ -806,7 +806,9 @@ async function processAll(){
     const noShows = cohortExpected.filter(x=>!x.onp).map(x=>({
       id:x.id, dept_bucket:bucketOf(x), emp_type:x.typ, corner:x.corner, date:isoDate, reason:"No-Show"
     }));
-    btnNoShow.onclick = ()=> downloadCSV(`no_shows_${isoDate}.csv`, noShows.length?noShows:[{id:"",dept_bucket:"",emp_type:"",corner:"",date:isoDate,reason:"No-Show"}]);
+    if (btnNoShow) {
+      btnNoShow.onclick = ()=> downloadCSV(`no_shows_${isoDate}.csv`, noShows.length?noShows:[{id:"",dept_bucket:"",emp_type:"",corner:"",date:isoDate,reason:"No-Show"}]);
+    }
 
     // ================= AUDIT TABLE =================
     // Priority: Vacation > BH > VTO > Swap-Out > VET-not-shown > No-Show

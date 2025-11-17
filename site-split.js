@@ -337,7 +337,7 @@ function initializeSiteSplit() {
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
-        a.download = `Site_Split_filled_${date}_${shift}.xlsx`;
+        a.download = `Attendance_report_${date}_${shift}.xlsx`;
         document.body.appendChild(a);
         a.click();
         URL.revokeObjectURL(url);
