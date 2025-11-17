@@ -77,7 +77,9 @@
       </div>
 
       <h2 class="card-title">Dept × AMZN/TEMP (Inbound, DA, ICQA, CRETs)</h2>
-      <table id="replicaTable" class="table"></table>
+      <div class="table-wrapper">
+        <table id="replicaTable" class="table"></table>
+      </div>
 
       <div class="row mt" style="gap:12px; align-items:center;">
         <button id="dlNoShow" class="btn btn-green">Download No-Show CSV</button>
@@ -93,7 +95,9 @@
         <button id="dlAuditCSV" class="btn">Download Audit CSV</button>
       </div>
       <p class="hint">Breakdown of scheduled associates who did not show, grouped by reason (mutually exclusive: Vacation &gt; Banked Holiday &gt; VTO &gt; Swap-Out &gt; VET-not-shown &gt; No-Show).</p>
-      <table id="auditTable" class="table"></table>
+      <div class="table-wrapper">
+        <table id="auditTable" class="table"></table>
+      </div>
     </section>
 
     <!-- OPS -->
@@ -113,7 +117,9 @@
         <button id="downloadSiteSplitTemplate" class="btn">Download Site Split Template</button>
         <span class="hint">Generates an Excel identical to the template with current data.</span>
       </div>
-      <table id="siteSplitTable" class="table"></table>
+      <div class="table-wrapper">
+        <table id="siteSplitTable" class="table"></table>
+      </div>
     </section>
   </main>
 </body>

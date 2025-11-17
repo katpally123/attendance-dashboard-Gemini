@@ -83,6 +83,7 @@ function renderYDD2OpsTable(date, shift) {
     <div class="ops-section">
       <h3>YDD2-CRETS Operations</h3>
       <p>Date: ${date} (${dayName}) | Shift: ${shift}</p>
+      <div class="table-wrapper">
       <table class="ops-table">
         <thead>
           <tr>
@@ -140,7 +141,7 @@ function renderYDD2OpsTable(date, shift) {
     </tr>
   `;
 
-  tableHTML += `</tbody></table></div>`;
+  tableHTML += `</tbody></table></div></div>`;
   return tableHTML;
 }
 
@@ -159,6 +160,7 @@ function renderYHM2OpsTable(date, shift) {
     <div class="ops-section">
       <h3>YHM2-Inbound/DA Operations</h3>
       <p>Date: ${date} (${dayName}) | Shift: ${shift}</p>
+      <div class="table-wrapper">
       <table class="ops-table">
         <thead>
           <tr>
@@ -168,6 +170,7 @@ function renderYHM2OpsTable(date, shift) {
             <th>Delta</th>
           </tr>
         </thead>
+        <tbody>`;
         <tbody>`;
 
   // Shift code rows
@@ -216,7 +219,7 @@ function renderYHM2OpsTable(date, shift) {
     </tr>
   `;
 
-  tableHTML += `</tbody></table></div>`;
+  tableHTML += `</tbody></table></div></div>`;
   return tableHTML;
 }
 
